@@ -5,7 +5,7 @@ after target dates pass.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -15,6 +15,46 @@ from stockai.data.models import Prediction, Stock
 from stockai.data.sources.yahoo import YahooFinanceSource
 
 logger = logging.getLogger(__name__)
+
+# Threshold for NEUTRAL direction: if absolute return is below this percentage,
+# the actual direction is considered NEUTRAL
+NEUTRAL_THRESHOLD_PERCENT = 0.5
+
+# Maximum days to look back/forward for business day adjustment
+MAX_BUSINESS_DAY_ADJUSTMENT = 5
+
+
+def _adjust_to_business_day(date: datetime, forward: bool = True) -> datetime:
+    """Adjust a date to the nearest business day.
+
+    Handles weekends by moving to the closest trading day.
+    Note: Does not handle market holidays (would need calendar data).
+
+    Args:
+        date: The date to adjust
+        forward: If True, move forward to next business day;
+                 if False, move backward to previous business day
+
+    Returns:
+        Adjusted datetime on a business day (weekday)
+    """
+    adjusted = date
+    attempts = 0
+
+    while attempts < MAX_BUSINESS_DAY_ADJUSTMENT:
+        # weekday(): Monday = 0, Sunday = 6
+        if adjusted.weekday() < 5:  # Monday to Friday
+            return adjusted
+
+        # Move forward or backward by 1 day
+        if forward:
+            adjusted = adjusted + timedelta(days=1)
+        else:
+            adjusted = adjusted - timedelta(days=1)
+        attempts += 1
+
+    # Return original if no business day found within limit
+    return date
 
 
 class PredictionAccuracyTracker:
@@ -89,6 +129,12 @@ class PredictionAccuracyTracker:
         Fetches historical prices and calculates the percentage return
         between prediction_date and target_date.
 
+        Handles edge cases:
+        - Missing price data: Returns None with appropriate logging
+        - Weekends/holidays: Adjusts dates to nearest business day
+        - Neutral case: Uses NEUTRAL_THRESHOLD_PERCENT to determine
+          if movement is significant enough to be UP/DOWN
+
         Args:
             symbol: Stock symbol
             prediction_date: Date when prediction was made
@@ -98,57 +144,103 @@ class PredictionAccuracyTracker:
             Dictionary with actual_direction, actual_return, or None if data unavailable
         """
         try:
-            # Fetch historical data covering both dates
+            # Adjust dates to business days (prediction looks back, target looks forward)
+            adjusted_pred_date = _adjust_to_business_day(prediction_date, forward=False)
+            adjusted_target_date = _adjust_to_business_day(target_date, forward=True)
+
+            # Fetch historical data covering both dates plus buffer for edge cases
+            fetch_start = adjusted_pred_date - timedelta(days=7)
+            fetch_end = adjusted_target_date + timedelta(days=7)
+
             df = self._yahoo.get_price_history(
                 symbol,
-                start=prediction_date,
-                end=target_date + __import__("datetime").timedelta(days=5),
+                start=fetch_start,
+                end=fetch_end,
             )
 
             if df is None or df.empty:
-                logger.warning(f"No price data found for {symbol}")
+                logger.warning(
+                    f"No price data found for {symbol} between "
+                    f"{fetch_start.date()} and {fetch_end.date()}"
+                )
+                return None
+
+            # Validate we have enough data
+            if len(df) < 2:
+                logger.warning(
+                    f"Insufficient price data for {symbol}: only {len(df)} records"
+                )
                 return None
 
             # Find prices closest to prediction and target dates
             df = df.sort_values("date")
             df["date"] = df["date"].dt.normalize()
 
-            # Get prediction date price (or closest available)
-            pred_date_normalized = prediction_date.replace(
+            # Normalize adjusted dates for comparison
+            pred_date_normalized = adjusted_pred_date.replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-            target_date_normalized = target_date.replace(
+            target_date_normalized = adjusted_target_date.replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
 
-            # Find closest price to prediction date
+            # Find closest price to prediction date (on or before)
             pred_prices = df[df["date"] <= pred_date_normalized]
             if pred_prices.empty:
+                # No prices before pred date, use earliest available
                 pred_prices = df.head(1)
+                logger.info(
+                    f"Using earliest available price for {symbol} prediction date"
+                )
             pred_price = float(pred_prices.iloc[-1]["close"])
+            actual_pred_date = pred_prices.iloc[-1]["date"]
 
-            # Find closest price to target date
+            # Find closest price to target date (on or before)
             target_prices = df[df["date"] <= target_date_normalized]
             if target_prices.empty:
+                # No prices before target date, use latest available
                 target_prices = df.tail(1)
+                logger.info(
+                    f"Using latest available price for {symbol} target date"
+                )
             target_price = float(target_prices.iloc[-1]["close"])
+            actual_target_date = target_prices.iloc[-1]["date"]
+
+            # Validate prices are different dates (sanity check)
+            if actual_pred_date == actual_target_date:
+                logger.warning(
+                    f"Same date used for both prediction and target for {symbol}: "
+                    f"{actual_pred_date}"
+                )
+                # Still calculate, but log the issue
+
+            # Validate prices are positive (data quality check)
+            if pred_price <= 0 or target_price <= 0:
+                logger.error(
+                    f"Invalid prices for {symbol}: "
+                    f"pred_price={pred_price}, target_price={target_price}"
+                )
+                return None
 
             # Calculate return percentage
             actual_return = ((target_price - pred_price) / pred_price) * 100
 
-            # Determine actual direction
-            if actual_return > 0:
-                actual_direction = "UP"
-            elif actual_return < 0:
-                actual_direction = "DOWN"
-            else:
+            # Determine actual direction using NEUTRAL threshold
+            # If movement is within threshold, it's considered NEUTRAL
+            if abs(actual_return) < NEUTRAL_THRESHOLD_PERCENT:
                 actual_direction = "NEUTRAL"
+            elif actual_return > 0:
+                actual_direction = "UP"
+            else:
+                actual_direction = "DOWN"
 
             return {
                 "actual_direction": actual_direction,
                 "actual_return": round(actual_return, 4),
                 "pred_price": pred_price,
                 "target_price": target_price,
+                "actual_pred_date": actual_pred_date,
+                "actual_target_date": actual_target_date,
             }
 
         except Exception as e:
@@ -211,19 +303,23 @@ class PredictionAccuracyTracker:
 
                     # Determine if prediction was correct
                     # Prediction is correct if predicted direction matches actual direction
-                    # For NEUTRAL predictions, compare with actual direction
                     predicted_direction = prediction.direction
                     actual_direction = actual_values["actual_direction"]
 
                     if predicted_direction == actual_direction:
+                        # Exact match - prediction is correct
                         prediction.is_correct = True
                     elif predicted_direction == "NEUTRAL":
-                        # NEUTRAL is considered correct if actual return is small
-                        prediction.is_correct = abs(actual_values["actual_return"]) < 0.5
+                        # We predicted NEUTRAL - correct if actual return is within threshold
+                        prediction.is_correct = (
+                            abs(actual_values["actual_return"]) < NEUTRAL_THRESHOLD_PERCENT
+                        )
                     elif actual_direction == "NEUTRAL":
                         # Actual is NEUTRAL but we predicted UP/DOWN
+                        # This means the movement was too small to matter
                         prediction.is_correct = False
                     else:
+                        # Predicted UP but went DOWN, or predicted DOWN but went UP
                         prediction.is_correct = False
 
                     updated_count += 1
