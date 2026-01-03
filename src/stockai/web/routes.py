@@ -26,6 +26,7 @@ from stockai.web.services.watchlist import (
     get_watchlist_items,
     get_watchlist_item_by_id,
     remove_from_watchlist,
+    remove_from_watchlist_by_symbol,
     update_watchlist_item,
     WatchlistItemExistsError,
     WatchlistItemNotFoundError,
@@ -377,6 +378,30 @@ async def delete_watchlist_item(item_id: int) -> WatchlistDeleteResponse:
         raise HTTPException(
             status_code=404,
             detail=f"Watchlist item with id={item_id} not found",
+        )
+
+    return WatchlistDeleteResponse(
+        message=f"Successfully removed {deleted_item.stock.symbol} from watchlist",
+        deleted_item=WatchlistItemResponse.model_validate(deleted_item),
+    )
+
+
+@api_router.delete("/watchlist/symbol/{symbol}", response_model=WatchlistDeleteResponse)
+async def delete_watchlist_item_by_symbol(symbol: str) -> WatchlistDeleteResponse:
+    """Remove a stock from the watchlist by stock symbol.
+
+    Convenience endpoint that allows removing a stock from the watchlist
+    using the stock symbol instead of the watchlist item ID.
+    Returns 404 if the stock is not in the watchlist.
+    """
+    init_database()
+
+    try:
+        deleted_item = remove_from_watchlist_by_symbol(symbol)
+    except WatchlistItemNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Stock {symbol.upper()} is not in the watchlist",
         )
 
     return WatchlistDeleteResponse(
