@@ -375,6 +375,187 @@ def get_volume_analysis(symbol: str, period: str = "3mo") -> dict[str, Any]:
         return {"error": str(e)}
 
 
+@stockai_tool(name="get_volume_profile", category="analysis")
+def get_volume_profile(symbol: str, period: str = "1mo", num_levels: int = 20) -> dict[str, Any]:
+    """Calculate volume profile by price level for a stock.
+
+    Shows where most trading volume occurred across price levels.
+    Useful for identifying support/resistance zones based on volume.
+
+    Args:
+        symbol: Stock ticker symbol
+        period: Period for calculation (default 1mo)
+        num_levels: Number of price levels to divide into (default 20)
+
+    Returns:
+        Dictionary with volume profile data including POC, VAH, VAL
+    """
+    logger.info(f"Calculating volume profile for {symbol}")
+
+    df = _yahoo.get_price_history(symbol, period=period)
+
+    if df.empty or len(df) < 5:
+        return {"error": f"Insufficient data for volume profile of {symbol}"}
+
+    try:
+        import numpy as np
+
+        close = df["close"]
+        high = df["high"]
+        low = df["low"]
+        volume = df["volume"]
+
+        # Determine price range
+        price_min = low.min()
+        price_max = high.max()
+        price_range = price_max - price_min
+
+        if price_range <= 0:
+            return {"error": f"Invalid price range for {symbol}"}
+
+        # Create price bins
+        bin_size = price_range / num_levels
+        bins = np.linspace(price_min, price_max, num_levels + 1)
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+
+        # Calculate volume at each price level
+        # For each bar, distribute volume across price levels based on price range
+        volume_by_level = np.zeros(num_levels)
+
+        for i in range(len(df)):
+            bar_low = low.iloc[i]
+            bar_high = high.iloc[i]
+            bar_volume = volume.iloc[i]
+            bar_close = close.iloc[i]
+
+            # Find which bins this bar's price range covers
+            for j in range(num_levels):
+                level_low = bins[j]
+                level_high = bins[j + 1]
+
+                # Calculate overlap between bar's price range and this level
+                overlap_low = max(bar_low, level_low)
+                overlap_high = min(bar_high, level_high)
+
+                if overlap_high > overlap_low:
+                    # Distribute volume proportionally based on overlap
+                    bar_range = bar_high - bar_low
+                    if bar_range > 0:
+                        overlap_ratio = (overlap_high - overlap_low) / bar_range
+                        volume_by_level[j] += bar_volume * overlap_ratio
+                    else:
+                        # Single price bar, assign to closest bin
+                        if level_low <= bar_close <= level_high:
+                            volume_by_level[j] += bar_volume
+
+        total_volume = volume_by_level.sum()
+
+        if total_volume <= 0:
+            return {"error": f"No volume data for {symbol}"}
+
+        # Find Point of Control (POC) - price level with highest volume
+        poc_index = np.argmax(volume_by_level)
+        poc_price = bin_centers[poc_index]
+        poc_volume = volume_by_level[poc_index]
+
+        # Calculate Value Area (70% of total volume centered around POC)
+        target_volume = total_volume * 0.70
+        value_area_volume = poc_volume
+        va_low_idx = poc_index
+        va_high_idx = poc_index
+
+        # Expand value area from POC until we capture 70% of volume
+        while value_area_volume < target_volume:
+            # Check volume at adjacent levels
+            lower_vol = volume_by_level[va_low_idx - 1] if va_low_idx > 0 else 0
+            upper_vol = volume_by_level[va_high_idx + 1] if va_high_idx < num_levels - 1 else 0
+
+            if lower_vol == 0 and upper_vol == 0:
+                break
+
+            # Expand toward the side with more volume
+            if lower_vol >= upper_vol and va_low_idx > 0:
+                va_low_idx -= 1
+                value_area_volume += volume_by_level[va_low_idx]
+            elif va_high_idx < num_levels - 1:
+                va_high_idx += 1
+                value_area_volume += volume_by_level[va_high_idx]
+            elif va_low_idx > 0:
+                va_low_idx -= 1
+                value_area_volume += volume_by_level[va_low_idx]
+            else:
+                break
+
+        val_price = bins[va_low_idx]  # Value Area Low
+        vah_price = bins[va_high_idx + 1]  # Value Area High
+
+        current_price = close.iloc[-1]
+
+        # Create volume profile data for visualization
+        volume_profile = []
+        for i in range(num_levels):
+            level_volume = volume_by_level[i]
+            volume_pct = (level_volume / total_volume * 100) if total_volume > 0 else 0
+            volume_profile.append({
+                "price_low": round(bins[i], 2),
+                "price_high": round(bins[i + 1], 2),
+                "price_mid": round(bin_centers[i], 2),
+                "volume": int(level_volume),
+                "volume_percent": round(volume_pct, 2),
+                "is_poc": i == poc_index,
+                "in_value_area": va_low_idx <= i <= va_high_idx,
+            })
+
+        # Generate interpretation
+        signals = []
+        if current_price > vah_price:
+            signals.append("🟢 Price above Value Area High (potential breakout)")
+        elif current_price < val_price:
+            signals.append("🔴 Price below Value Area Low (potential breakdown)")
+        else:
+            signals.append("⚪ Price within Value Area (consolidation zone)")
+
+        # Identify if current price is near high volume nodes (support/resistance)
+        price_to_poc_dist = abs(current_price - poc_price) / poc_price * 100
+        if price_to_poc_dist < 2:
+            signals.append("⚠️ Price near POC (strong support/resistance)")
+
+        return {
+            "symbol": symbol.upper(),
+            "period": period,
+            "current_price": round(current_price, 2),
+            "price_range": {
+                "min": round(price_min, 2),
+                "max": round(price_max, 2),
+            },
+            "volume_profile": {
+                "poc": {
+                    "price": round(poc_price, 2),
+                    "volume": int(poc_volume),
+                    "volume_percent": round(poc_volume / total_volume * 100, 2),
+                    "description": "Point of Control - highest volume price level",
+                },
+                "value_area": {
+                    "high": round(vah_price, 2),
+                    "low": round(val_price, 2),
+                    "volume_percent": round(value_area_volume / total_volume * 100, 2),
+                    "description": "Value Area - price range containing ~70% of volume",
+                },
+                "total_volume": int(total_volume),
+                "num_levels": num_levels,
+            },
+            "levels": volume_profile,
+            "signals": signals,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    except ImportError:
+        return {"error": "NumPy library not available"}
+    except Exception as e:
+        logger.error(f"Volume profile calculation failed: {e}")
+        return {"error": str(e)}
+
+
 @stockai_tool(name="get_idx30_stocks", category="index")
 def get_idx30_stocks() -> dict[str, Any]:
     """Get list of IDX30 index components.
