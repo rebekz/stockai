@@ -312,6 +312,25 @@ async def sentiment_page(request: Request):
     )
 
 
+@api_router.get("/predictions/accuracy")
+async def get_prediction_accuracy() -> dict:
+    """Get overall prediction accuracy metrics.
+
+    Returns accuracy statistics across all evaluated predictions including:
+    - Overall accuracy rate
+    - Accuracy breakdown by direction (UP/DOWN/NEUTRAL)
+    - Accuracy breakdown by confidence level (HIGH/MEDIUM/LOW)
+    """
+    init_database()
+
+    from stockai.core.predictor import PredictionAccuracyTracker
+
+    tracker = PredictionAccuracyTracker()
+    metrics = tracker.get_accuracy_metrics()
+
+    return metrics
+
+
 @api_router.get("/export/{symbol}")
 async def export_stock_report(symbol: str) -> dict:
     """Generate stock analysis report data for PDF export.
