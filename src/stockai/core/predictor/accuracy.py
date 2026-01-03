@@ -453,3 +453,184 @@ class PredictionAccuracyTracker:
                 return _execute(session)
         else:
             return _execute(self._session)
+
+    def get_stock_accuracy(self, symbol: str) -> dict[str, Any]:
+        """Get accuracy metrics for a specific stock symbol.
+
+        Calculates stock-specific accuracy statistics and includes
+        recent predictions with their outcomes, plus accuracy trend over time.
+
+        Args:
+            symbol: Stock ticker symbol (e.g., "BBRI.JK")
+
+        Returns:
+            Dictionary with stock-specific accuracy metrics including:
+            - symbol: The stock symbol
+            - total_predictions: Total evaluated predictions for this stock
+            - correct_predictions: Number of correct predictions
+            - accuracy_rate: Percentage of correct predictions (0-100)
+            - by_direction: Accuracy breakdown by predicted direction
+            - by_confidence: Accuracy breakdown by confidence level
+            - recent_predictions: List of recent predictions with outcomes
+            - accuracy_trend: Monthly accuracy trend over time
+            Returns empty metrics gracefully for stocks with no predictions
+        """
+
+        def _execute(session: Session) -> dict:
+            # First, find the stock by symbol
+            stock = session.query(Stock).filter(Stock.symbol == symbol).first()
+
+            # Handle stock not found
+            if not stock:
+                return {
+                    "symbol": symbol,
+                    "total_predictions": 0,
+                    "correct_predictions": 0,
+                    "accuracy_rate": 0.0,
+                    "by_direction": {
+                        "UP": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                        "DOWN": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                        "NEUTRAL": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                    },
+                    "by_confidence": {
+                        "HIGH": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                        "MEDIUM": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                        "LOW": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                    },
+                    "recent_predictions": [],
+                    "accuracy_trend": [],
+                    "message": f"Stock '{symbol}' not found",
+                }
+
+            # Get all evaluated predictions for this stock (where is_correct is not null)
+            predictions = (
+                session.query(Prediction)
+                .filter(Prediction.stock_id == stock.id)
+                .filter(Prediction.is_correct.isnot(None))
+                .order_by(Prediction.target_date.desc())
+                .all()
+            )
+
+            # Handle no predictions gracefully
+            if not predictions:
+                return {
+                    "symbol": symbol,
+                    "stock_name": stock.name,
+                    "total_predictions": 0,
+                    "correct_predictions": 0,
+                    "accuracy_rate": 0.0,
+                    "by_direction": {
+                        "UP": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                        "DOWN": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                        "NEUTRAL": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                    },
+                    "by_confidence": {
+                        "HIGH": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                        "MEDIUM": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                        "LOW": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                    },
+                    "recent_predictions": [],
+                    "accuracy_trend": [],
+                    "message": f"No evaluated predictions for '{symbol}'",
+                }
+
+            # Calculate overall metrics
+            total_predictions = len(predictions)
+            correct_predictions = sum(1 for p in predictions if p.is_correct)
+            accuracy_rate = (correct_predictions / total_predictions) * 100
+
+            # Calculate accuracy by direction (UP/DOWN/NEUTRAL)
+            direction_stats = {}
+            for direction in ["UP", "DOWN", "NEUTRAL"]:
+                direction_preds = [p for p in predictions if p.direction == direction]
+                total = len(direction_preds)
+                correct = sum(1 for p in direction_preds if p.is_correct)
+                direction_stats[direction] = {
+                    "total": total,
+                    "correct": correct,
+                    "accuracy_rate": round((correct / total * 100), 2) if total > 0 else 0.0,
+                }
+
+            # Calculate accuracy by confidence level
+            confidence_stats = {
+                "HIGH": {"total": 0, "correct": 0},
+                "MEDIUM": {"total": 0, "correct": 0},
+                "LOW": {"total": 0, "correct": 0},
+            }
+
+            for p in predictions:
+                confidence = p.confidence or 0
+                if confidence >= 0.7:
+                    level = "HIGH"
+                elif confidence >= 0.4:
+                    level = "MEDIUM"
+                else:
+                    level = "LOW"
+
+                confidence_stats[level]["total"] += 1
+                if p.is_correct:
+                    confidence_stats[level]["correct"] += 1
+
+            # Calculate accuracy rates for confidence levels
+            for level, stats in confidence_stats.items():
+                total = stats["total"]
+                correct = stats["correct"]
+                stats["accuracy_rate"] = round((correct / total * 100), 2) if total > 0 else 0.0
+
+            # Get recent predictions with outcomes (last 10)
+            recent_predictions = []
+            for p in predictions[:10]:
+                recent_predictions.append({
+                    "id": p.id,
+                    "prediction_date": p.prediction_date.isoformat() if p.prediction_date else None,
+                    "target_date": p.target_date.isoformat() if p.target_date else None,
+                    "direction": p.direction,
+                    "confidence": round(p.confidence, 4) if p.confidence else None,
+                    "actual_direction": p.actual_direction,
+                    "actual_return": round(p.actual_return, 4) if p.actual_return else None,
+                    "is_correct": p.is_correct,
+                })
+
+            # Calculate accuracy trend over time (by month)
+            # Group predictions by month and calculate accuracy for each
+            monthly_accuracy = {}
+            for p in predictions:
+                if p.target_date:
+                    # Use target_date for the month key
+                    month_key = p.target_date.strftime("%Y-%m")
+                    if month_key not in monthly_accuracy:
+                        monthly_accuracy[month_key] = {"total": 0, "correct": 0}
+                    monthly_accuracy[month_key]["total"] += 1
+                    if p.is_correct:
+                        monthly_accuracy[month_key]["correct"] += 1
+
+            # Convert to sorted list of accuracy trend
+            accuracy_trend = []
+            for month in sorted(monthly_accuracy.keys()):
+                stats = monthly_accuracy[month]
+                accuracy_trend.append({
+                    "month": month,
+                    "total": stats["total"],
+                    "correct": stats["correct"],
+                    "accuracy_rate": round(
+                        (stats["correct"] / stats["total"] * 100), 2
+                    ) if stats["total"] > 0 else 0.0,
+                })
+
+            return {
+                "symbol": symbol,
+                "stock_name": stock.name,
+                "total_predictions": total_predictions,
+                "correct_predictions": correct_predictions,
+                "accuracy_rate": round(accuracy_rate, 2),
+                "by_direction": direction_stats,
+                "by_confidence": confidence_stats,
+                "recent_predictions": recent_predictions,
+                "accuracy_trend": accuracy_trend,
+            }
+
+        if self._use_context_manager:
+            with session_scope() as session:
+                return _execute(session)
+        else:
+            return _execute(self._session)
