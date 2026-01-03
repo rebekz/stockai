@@ -1,0 +1,25 @@
+{
+  "active": true,
+  "spec": "002-add-watchlist-api-endpoints",
+  "state": "building",
+  "subtasks": {
+    "completed": 1,
+    "total": 12,
+    "in_progress": 1,
+    "failed": 0
+  },
+  "phase": {
+    "current": "Database Operations",
+    "id": null,
+    "total": 1
+  },
+  "workers": {
+    "active": 0,
+    "max": 1
+  },
+  "session": {
+    "number": 3,
+    "started_at": "2026-01-04T00:29:20.349920"
+  },
+  "last_update": "2026-01-04T00:36:49.306710"
+}
