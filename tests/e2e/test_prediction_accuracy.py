@@ -834,5 +834,433 @@ class TestPredictionAccuracyTrackerEdgeCases:
         assert result is None
 
 
+# ============ API Endpoint Tests ============
+
+from fastapi.testclient import TestClient
+from stockai.web.app import create_app
+
+
+class TestPredictionAccuracyAPI:
+    """Tests for prediction accuracy API endpoints."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Setup test database and client."""
+        init_database()
+        app = create_app()
+        self.client = TestClient(app)
+        # Clear existing data
+        with get_db() as session:
+            session.query(Prediction).delete()
+            session.query(Stock).delete()
+            session.commit()
+
+    def _create_test_stock(self, session, symbol="BBCA"):
+        """Create a test stock."""
+        stock = Stock(symbol=symbol, name=f"{symbol} Company", sector="Finance")
+        session.add(stock)
+        session.commit()
+        session.refresh(stock)
+        return stock
+
+    def _create_evaluated_prediction(
+        self, session, stock, direction="UP", is_correct=True, confidence=0.7
+    ):
+        """Create an evaluated prediction."""
+        pred = Prediction(
+            stock_id=stock.id,
+            prediction_date=datetime.utcnow() - timedelta(days=10),
+            target_date=datetime.utcnow() - timedelta(days=5),
+            direction=direction,
+            confidence=confidence,
+            is_correct=is_correct,
+            actual_direction=direction if is_correct else ("DOWN" if direction == "UP" else "UP"),
+            actual_return=5.0 if is_correct else -5.0,
+            xgboost_prob=0.6,
+            lstm_prob=0.5,
+            sentiment_score=0.3,
+        )
+        session.add(pred)
+        session.commit()
+        return pred
+
+    def _create_pending_prediction(self, session, stock, direction="UP", confidence=0.7):
+        """Create a pending prediction (not yet evaluated)."""
+        pred = Prediction(
+            stock_id=stock.id,
+            prediction_date=datetime.utcnow() - timedelta(days=10),
+            target_date=datetime.utcnow() - timedelta(days=5),
+            direction=direction,
+            confidence=confidence,
+            is_correct=None,
+            actual_direction=None,
+            actual_return=None,
+            xgboost_prob=0.6,
+            lstm_prob=0.5,
+            sentiment_score=0.3,
+        )
+        session.add(pred)
+        session.commit()
+        return pred
+
+
+class TestGetPredictionAccuracyEndpoint(TestPredictionAccuracyAPI):
+    """Tests for GET /api/predictions/accuracy endpoint."""
+
+    def test_get_accuracy_returns_200(self):
+        """Endpoint should return 200 OK."""
+        response = self.client.get("/api/predictions/accuracy")
+        assert response.status_code == 200
+
+    def test_get_accuracy_empty_database(self):
+        """Should return valid metrics when no predictions exist."""
+        response = self.client.get("/api/predictions/accuracy")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["total_predictions"] == 0
+        assert data["correct_predictions"] == 0
+        assert data["accuracy_rate"] == 0.0
+        assert "message" in data
+
+    def test_get_accuracy_with_predictions(self):
+        """Should return accuracy metrics when predictions exist."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            # 3 correct, 2 wrong = 60% accuracy
+            for _ in range(3):
+                self._create_evaluated_prediction(session, stock, is_correct=True)
+            for _ in range(2):
+                self._create_evaluated_prediction(session, stock, is_correct=False)
+
+        response = self.client.get("/api/predictions/accuracy")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["total_predictions"] == 5
+        assert data["correct_predictions"] == 3
+        assert data["accuracy_rate"] == 60.0
+
+    def test_get_accuracy_includes_direction_breakdown(self):
+        """Should include accuracy breakdown by direction."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            self._create_evaluated_prediction(session, stock, direction="UP", is_correct=True)
+            self._create_evaluated_prediction(session, stock, direction="DOWN", is_correct=False)
+
+        response = self.client.get("/api/predictions/accuracy")
+        data = response.json()
+
+        assert "by_direction" in data
+        assert "UP" in data["by_direction"]
+        assert "DOWN" in data["by_direction"]
+
+    def test_get_accuracy_includes_confidence_breakdown(self):
+        """Should include accuracy breakdown by confidence level."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            # HIGH confidence
+            self._create_evaluated_prediction(session, stock, confidence=0.8, is_correct=True)
+            # MEDIUM confidence
+            self._create_evaluated_prediction(session, stock, confidence=0.5, is_correct=False)
+            # LOW confidence
+            self._create_evaluated_prediction(session, stock, confidence=0.3, is_correct=True)
+
+        response = self.client.get("/api/predictions/accuracy")
+        data = response.json()
+
+        assert "by_confidence" in data
+        assert "HIGH" in data["by_confidence"]
+        assert "MEDIUM" in data["by_confidence"]
+        assert "LOW" in data["by_confidence"]
+
+    def test_get_accuracy_json_content_type(self):
+        """Endpoint should return JSON."""
+        response = self.client.get("/api/predictions/accuracy")
+        assert "application/json" in response.headers["content-type"]
+
+
+class TestGetStockAccuracyEndpoint(TestPredictionAccuracyAPI):
+    """Tests for GET /api/predictions/accuracy/{symbol} endpoint."""
+
+    def test_get_stock_accuracy_unknown_symbol(self):
+        """Should return 404 for unknown stock symbol."""
+        response = self.client.get("/api/predictions/accuracy/UNKNOWN")
+        assert response.status_code == 404
+
+    def test_get_stock_accuracy_no_predictions(self):
+        """Should return 404 for stock with no predictions."""
+        with get_db() as session:
+            self._create_test_stock(session, "BBCA")
+
+        response = self.client.get("/api/predictions/accuracy/BBCA")
+        assert response.status_code == 404
+
+    def test_get_stock_accuracy_with_data(self):
+        """Should return accuracy metrics for stock with predictions."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            # 3 correct, 1 wrong = 75% accuracy
+            for _ in range(3):
+                self._create_evaluated_prediction(session, stock, is_correct=True)
+            self._create_evaluated_prediction(session, stock, is_correct=False)
+
+        response = self.client.get("/api/predictions/accuracy/BBCA")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["symbol"] == "BBCA"
+        assert data["total_predictions"] == 4
+        assert data["correct_predictions"] == 3
+        assert data["accuracy_rate"] == 75.0
+
+    def test_get_stock_accuracy_case_insensitive(self):
+        """Should handle lowercase symbol."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            self._create_evaluated_prediction(session, stock, is_correct=True)
+
+        response = self.client.get("/api/predictions/accuracy/bbca")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["symbol"] == "BBCA"
+
+    def test_get_stock_accuracy_includes_recent_predictions(self):
+        """Should include recent predictions in response."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            self._create_evaluated_prediction(session, stock, direction="UP", is_correct=True)
+
+        response = self.client.get("/api/predictions/accuracy/BBCA")
+        data = response.json()
+
+        assert "recent_predictions" in data
+        assert len(data["recent_predictions"]) >= 1
+        assert data["recent_predictions"][0]["direction"] == "UP"
+        assert data["recent_predictions"][0]["is_correct"] is True
+
+    def test_get_stock_accuracy_includes_trend(self):
+        """Should include accuracy trend in response."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            # Create predictions for different months
+            for month in [1, 2, 3]:
+                pred = Prediction(
+                    stock_id=stock.id,
+                    prediction_date=datetime(2024, month, 1),
+                    target_date=datetime(2024, month, 15),
+                    direction="UP",
+                    confidence=0.7,
+                    is_correct=True,
+                    actual_direction="UP",
+                    actual_return=5.0,
+                )
+                session.add(pred)
+            session.commit()
+
+        response = self.client.get("/api/predictions/accuracy/BBCA")
+        data = response.json()
+
+        assert "accuracy_trend" in data
+        assert len(data["accuracy_trend"]) == 3
+
+    def test_get_stock_accuracy_includes_breakdown(self):
+        """Should include breakdowns by direction and confidence."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            self._create_evaluated_prediction(session, stock, direction="UP", is_correct=True)
+            self._create_evaluated_prediction(session, stock, direction="DOWN", is_correct=False)
+
+        response = self.client.get("/api/predictions/accuracy/BBCA")
+        data = response.json()
+
+        assert "by_direction" in data
+        assert "by_confidence" in data
+
+
+class TestBackfillPredictionAccuracyEndpoint(TestPredictionAccuracyAPI):
+    """Tests for POST /api/predictions/backfill endpoint."""
+
+    def test_backfill_returns_200(self):
+        """Endpoint should return 200 OK."""
+        response = self.client.post("/api/predictions/backfill")
+        assert response.status_code == 200
+
+    def test_backfill_no_pending_predictions(self):
+        """Should return success when no predictions to update."""
+        response = self.client.post("/api/predictions/backfill")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["updated_count"] == 0
+        assert data["message"] == "No predictions to update"
+
+    @patch("stockai.core.predictor.accuracy.YahooFinanceSource")
+    def test_backfill_updates_predictions(self, mock_yahoo_class):
+        """Should update pending predictions with actual data."""
+        # Setup mock
+        mock_yahoo = MagicMock()
+        mock_yahoo_class.return_value = mock_yahoo
+
+        dates = pd.date_range(start="2024-01-01", periods=30, freq="B")
+        mock_df = pd.DataFrame({
+            "date": dates,
+            "close": [100 + (i * 2) for i in range(30)],  # UP movement
+        })
+        mock_yahoo.get_price_history.return_value = mock_df
+
+        # Create pending prediction
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            pred = Prediction(
+                stock_id=stock.id,
+                prediction_date=datetime(2024, 1, 5),
+                target_date=datetime(2024, 1, 15),
+                direction="UP",
+                confidence=0.7,
+                is_correct=None,
+                actual_direction=None,
+                actual_return=None,
+            )
+            session.add(pred)
+            session.commit()
+
+        response = self.client.post("/api/predictions/backfill")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["updated_count"] == 1
+
+    def test_backfill_returns_statistics(self):
+        """Should return backfill statistics in response."""
+        response = self.client.post("/api/predictions/backfill")
+        data = response.json()
+
+        # Should include standard statistics fields
+        assert "updated_count" in data
+        assert "message" in data
+
+    @patch("stockai.core.predictor.accuracy.YahooFinanceSource")
+    def test_backfill_handles_missing_price_data(self, mock_yahoo_class):
+        """Should handle missing price data gracefully."""
+        mock_yahoo = MagicMock()
+        mock_yahoo_class.return_value = mock_yahoo
+        mock_yahoo.get_price_history.return_value = None
+
+        # Create pending prediction
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            self._create_pending_prediction(session, stock)
+
+        response = self.client.post("/api/predictions/backfill")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["skipped_count"] >= 1
+
+    @patch("stockai.core.predictor.accuracy.YahooFinanceSource")
+    def test_backfill_multiple_predictions(self, mock_yahoo_class):
+        """Should handle multiple pending predictions."""
+        mock_yahoo = MagicMock()
+        mock_yahoo_class.return_value = mock_yahoo
+
+        dates = pd.date_range(start="2024-01-01", periods=30, freq="B")
+        mock_df = pd.DataFrame({
+            "date": dates,
+            "close": [100 + (i * 2) for i in range(30)],
+        })
+        mock_yahoo.get_price_history.return_value = mock_df
+
+        # Create multiple pending predictions
+        with get_db() as session:
+            stock1 = self._create_test_stock(session, "BBCA")
+            stock2 = self._create_test_stock(session, "BBRI")
+
+            for stock in [stock1, stock2]:
+                pred = Prediction(
+                    stock_id=stock.id,
+                    prediction_date=datetime(2024, 1, 5),
+                    target_date=datetime(2024, 1, 15),
+                    direction="UP",
+                    confidence=0.7,
+                    is_correct=None,
+                    actual_direction=None,
+                    actual_return=None,
+                )
+                session.add(pred)
+            session.commit()
+
+        response = self.client.post("/api/predictions/backfill")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["updated_count"] == 2
+
+    def test_backfill_json_content_type(self):
+        """Endpoint should return JSON."""
+        response = self.client.post("/api/predictions/backfill")
+        assert "application/json" in response.headers["content-type"]
+
+
+class TestPredictionAccuracyAPIEdgeCases(TestPredictionAccuracyAPI):
+    """Edge case tests for prediction accuracy API endpoints."""
+
+    def test_accuracy_with_all_correct_predictions(self):
+        """Should handle 100% accuracy."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            for _ in range(5):
+                self._create_evaluated_prediction(session, stock, is_correct=True)
+
+        response = self.client.get("/api/predictions/accuracy")
+        data = response.json()
+
+        assert data["accuracy_rate"] == 100.0
+
+    def test_accuracy_with_all_wrong_predictions(self):
+        """Should handle 0% accuracy."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            for _ in range(5):
+                self._create_evaluated_prediction(session, stock, is_correct=False)
+
+        response = self.client.get("/api/predictions/accuracy")
+        data = response.json()
+
+        assert data["accuracy_rate"] == 0.0
+
+    def test_stock_accuracy_symbol_with_suffix(self):
+        """Should handle symbol with market suffix (e.g., BBCA.JK)."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA.JK")
+            self._create_evaluated_prediction(session, stock, is_correct=True)
+
+        response = self.client.get("/api/predictions/accuracy/BBCA.JK")
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["symbol"] == "BBCA.JK"
+
+    def test_backfill_idempotent(self):
+        """Backfill should be idempotent - already evaluated predictions not re-processed."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            # Create already evaluated prediction
+            self._create_evaluated_prediction(session, stock, is_correct=True)
+
+        # First backfill
+        response1 = self.client.post("/api/predictions/backfill")
+        data1 = response1.json()
+
+        # Second backfill
+        response2 = self.client.post("/api/predictions/backfill")
+        data2 = response2.json()
+
+        # Both should return no updates
+        assert data1["updated_count"] == 0
+        assert data2["updated_count"] == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
