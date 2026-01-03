@@ -397,6 +397,9 @@ def predict(
     symbol: str = typer.Argument(..., help="Stock symbol to predict"),
     horizon: int = typer.Option(3, "--horizon", "-h", help="Prediction horizon in days (1, 3, 7)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed model info"),
+    show_accuracy: bool = typer.Option(
+        False, "--show-accuracy", "-a", help="Show historical accuracy for this stock"
+    ),
 ) -> None:
     """Predict stock price movement (UP/DOWN).
 
@@ -407,6 +410,7 @@ def predict(
         stock predict BBCA
         stock predict TLKM --horizon 7
         stock predict BBRI --verbose
+        stock predict BBCA --show-accuracy
     """
     from rich.progress import Progress, SpinnerColumn, TextColumn
     from pathlib import Path
@@ -487,6 +491,10 @@ def predict(
             for model, loaded_status in loaded.items():
                 status = "[green]✓ Loaded[/green]" if loaded_status else "[red]✗ Not found[/red]"
                 console.print(f"  • {model.upper()}: {status}")
+
+        # Show historical accuracy if requested
+        if show_accuracy:
+            _display_stock_accuracy(symbol)
 
     except ImportError as e:
         console.print(f"[red]Error:[/red] Missing required package: {e}")
@@ -579,6 +587,95 @@ def _display_prediction_result(
             "\n".join(lines),
             title=f"🔮 Prediction for {symbol}",
             border_style=dir_color,
+        )
+    )
+
+
+def _display_stock_accuracy(symbol: str) -> None:
+    """Display historical accuracy for a stock.
+
+    Shows accuracy metrics if available, warns if accuracy is low.
+    """
+    from stockai.data.database import init_database
+    from stockai.core.predictor import PredictionAccuracyTracker
+
+    # Low accuracy threshold for warning
+    LOW_ACCURACY_THRESHOLD = 50.0
+
+    init_database()
+    tracker = PredictionAccuracyTracker()
+    accuracy = tracker.get_stock_accuracy(symbol)
+
+    total = accuracy.get("total_predictions", 0)
+    correct = accuracy.get("correct_predictions", 0)
+    accuracy_rate = accuracy.get("accuracy_rate", 0.0)
+
+    # Check if we have any evaluated predictions
+    if total == 0:
+        console.print(
+            Panel(
+                "[dim]No historical accuracy data available for this stock.[/dim]\n\n"
+                "Accuracy data is populated after predictions pass their target date.\n"
+                "[dim]Run backfill to update:[/dim]\n"
+                "  stock predictions backfill",
+                title="📊 Historical Accuracy",
+                border_style="dim",
+            )
+        )
+        return
+
+    # Determine styling based on accuracy
+    if accuracy_rate >= 70:
+        acc_color = "green"
+        acc_icon = "🟢"
+    elif accuracy_rate >= 50:
+        acc_color = "yellow"
+        acc_icon = "🟡"
+    else:
+        acc_color = "red"
+        acc_icon = "🔴"
+
+    # Build accuracy display lines
+    lines = []
+    lines.append(
+        f"[bold cyan]Accuracy Rate:[/bold cyan] [{acc_color}]{acc_icon} {accuracy_rate:.1f}%[/{acc_color}]"
+    )
+    lines.append(f"[bold cyan]Predictions:[/bold cyan] {correct}/{total} correct")
+
+    # Show direction breakdown if available
+    by_direction = accuracy.get("by_direction", {})
+    if by_direction:
+        dir_parts = []
+        for direction in ["UP", "DOWN", "NEUTRAL"]:
+            stats = by_direction.get(direction, {})
+            if stats.get("total", 0) > 0:
+                dir_parts.append(f"{direction}: {stats['accuracy_rate']:.0f}%")
+        if dir_parts:
+            lines.append(f"[bold cyan]By Direction:[/bold cyan] {', '.join(dir_parts)}")
+
+    # Show confidence breakdown if available
+    by_confidence = accuracy.get("by_confidence", {})
+    if by_confidence:
+        conf_parts = []
+        for level in ["HIGH", "MEDIUM", "LOW"]:
+            stats = by_confidence.get(level, {})
+            if stats.get("total", 0) > 0:
+                conf_parts.append(f"{level}: {stats['accuracy_rate']:.0f}%")
+        if conf_parts:
+            lines.append(f"[bold cyan]By Confidence:[/bold cyan] {', '.join(conf_parts)}")
+
+    # Add warning if accuracy is low
+    if accuracy_rate < LOW_ACCURACY_THRESHOLD:
+        lines.append(
+            f"\n[red]⚠️ Warning: Historical accuracy is below {LOW_ACCURACY_THRESHOLD:.0f}%[/red]"
+        )
+        lines.append("[red]Consider this when making investment decisions.[/red]")
+
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title=f"📊 Historical Accuracy for {symbol}",
+            border_style=acc_color,
         )
     )
 

@@ -1695,5 +1695,201 @@ class TestPredictionsCLIEdgeCases(TestPredictionsCLI):
         assert "backfill" in result.stdout
 
 
+class TestPredictShowAccuracyOption(TestPredictionsCLI):
+    """Tests for 'stock predict --show-accuracy' option."""
+
+    def test_predict_show_accuracy_option_exists(self):
+        """Test that --show-accuracy option exists."""
+        result = runner.invoke(app, ["predict", "--help"])
+        assert result.exit_code == 0
+        assert "--show-accuracy" in result.stdout or "-a" in result.stdout
+
+    def test_predict_show_accuracy_no_data(self):
+        """Test --show-accuracy with no accuracy data."""
+        # Create a stock but no predictions
+        with get_db() as session:
+            self._create_test_stock(session, symbol="TSTX")
+
+        # Mocking the prediction to avoid needing actual models
+        with patch("stockai.cli.main.EnsemblePredictor") as mock_predictor, \
+             patch("stockai.cli.main.YahooFinanceSource") as mock_yahoo:
+            # Mock Yahoo to return enough data
+            mock_df = MagicMock()
+            mock_df.empty = False
+            mock_df.__len__ = lambda s: 100
+            mock_yahoo.return_value.get_price_history.return_value = mock_df
+
+            # Mock predictor
+            mock_instance = MagicMock()
+            mock_instance.load_models.return_value = {"xgboost": True, "lstm": True}
+            mock_instance.predict.return_value = {
+                "direction": "UP",
+                "probability": 0.7,
+                "confidence": 0.75,
+                "confidence_level": "HIGH",
+                "model_agreement": True,
+                "contributions": {},
+            }
+            mock_predictor.return_value = mock_instance
+
+            result = runner.invoke(app, ["predict", "TSTX", "--show-accuracy"])
+
+        # Should show prediction and accuracy panel (even if no data)
+        assert result.exit_code == 0
+        assert "TSTX" in result.stdout.upper()
+        # Should show accuracy section even with no data
+        assert "Accuracy" in result.stdout or "accuracy" in result.stdout.lower()
+
+    def test_predict_show_accuracy_with_data(self):
+        """Test --show-accuracy with accuracy data available."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, symbol="TSTA")
+            # Create some evaluated predictions for this stock
+            for i in range(5):
+                self._create_evaluated_prediction(session, stock, is_correct=(i % 2 == 0))
+
+        # Mocking the prediction to avoid needing actual models
+        with patch("stockai.cli.main.EnsemblePredictor") as mock_predictor, \
+             patch("stockai.cli.main.YahooFinanceSource") as mock_yahoo:
+            # Mock Yahoo to return enough data
+            mock_df = MagicMock()
+            mock_df.empty = False
+            mock_df.__len__ = lambda s: 100
+            mock_yahoo.return_value.get_price_history.return_value = mock_df
+
+            # Mock predictor
+            mock_instance = MagicMock()
+            mock_instance.load_models.return_value = {"xgboost": True, "lstm": True}
+            mock_instance.predict.return_value = {
+                "direction": "UP",
+                "probability": 0.7,
+                "confidence": 0.75,
+                "confidence_level": "HIGH",
+                "model_agreement": True,
+                "contributions": {},
+            }
+            mock_predictor.return_value = mock_instance
+
+            result = runner.invoke(app, ["predict", "TSTA", "--show-accuracy"])
+
+        # Should show prediction and accuracy metrics
+        assert result.exit_code == 0
+        assert "TSTA" in result.stdout.upper()
+        # Should show accuracy rate
+        assert "%" in result.stdout  # Accuracy shown as percentage
+        assert "Accuracy" in result.stdout
+
+    def test_predict_show_accuracy_warns_on_low_accuracy(self):
+        """Test --show-accuracy warns when accuracy is low."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, symbol="TSTL")
+            # Create predictions with low accuracy (all wrong)
+            for _ in range(10):
+                self._create_evaluated_prediction(session, stock, is_correct=False)
+
+        # Mocking the prediction to avoid needing actual models
+        with patch("stockai.cli.main.EnsemblePredictor") as mock_predictor, \
+             patch("stockai.cli.main.YahooFinanceSource") as mock_yahoo:
+            # Mock Yahoo to return enough data
+            mock_df = MagicMock()
+            mock_df.empty = False
+            mock_df.__len__ = lambda s: 100
+            mock_yahoo.return_value.get_price_history.return_value = mock_df
+
+            # Mock predictor
+            mock_instance = MagicMock()
+            mock_instance.load_models.return_value = {"xgboost": True, "lstm": True}
+            mock_instance.predict.return_value = {
+                "direction": "DOWN",
+                "probability": 0.3,
+                "confidence": 0.6,
+                "confidence_level": "MEDIUM",
+                "model_agreement": True,
+                "contributions": {},
+            }
+            mock_predictor.return_value = mock_instance
+
+            result = runner.invoke(app, ["predict", "TSTL", "--show-accuracy"])
+
+        # Should show warning for low accuracy
+        assert result.exit_code == 0
+        assert "TSTL" in result.stdout.upper()
+        # Should warn about low accuracy (0% accuracy)
+        assert "Warning" in result.stdout or "warning" in result.stdout.lower()
+
+    def test_predict_show_accuracy_short_option(self):
+        """Test -a short option works for --show-accuracy."""
+        with get_db() as session:
+            self._create_test_stock(session, symbol="TSTS")
+
+        # Mocking the prediction to avoid needing actual models
+        with patch("stockai.cli.main.EnsemblePredictor") as mock_predictor, \
+             patch("stockai.cli.main.YahooFinanceSource") as mock_yahoo:
+            # Mock Yahoo to return enough data
+            mock_df = MagicMock()
+            mock_df.empty = False
+            mock_df.__len__ = lambda s: 100
+            mock_yahoo.return_value.get_price_history.return_value = mock_df
+
+            # Mock predictor
+            mock_instance = MagicMock()
+            mock_instance.load_models.return_value = {"xgboost": True, "lstm": True}
+            mock_instance.predict.return_value = {
+                "direction": "UP",
+                "probability": 0.8,
+                "confidence": 0.9,
+                "confidence_level": "HIGH",
+                "model_agreement": True,
+                "contributions": {},
+            }
+            mock_predictor.return_value = mock_instance
+
+            result = runner.invoke(app, ["predict", "TSTS", "-a"])
+
+        # Should work with short option -a
+        assert result.exit_code == 0
+        assert "TSTS" in result.stdout.upper()
+        assert "Accuracy" in result.stdout
+
+    def test_predict_without_show_accuracy_no_accuracy_panel(self):
+        """Test predict without --show-accuracy doesn't show accuracy panel."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, symbol="TSTN")
+            # Create some predictions
+            for _ in range(3):
+                self._create_evaluated_prediction(session, stock, is_correct=True)
+
+        # Mocking the prediction to avoid needing actual models
+        with patch("stockai.cli.main.EnsemblePredictor") as mock_predictor, \
+             patch("stockai.cli.main.YahooFinanceSource") as mock_yahoo:
+            # Mock Yahoo to return enough data
+            mock_df = MagicMock()
+            mock_df.empty = False
+            mock_df.__len__ = lambda s: 100
+            mock_yahoo.return_value.get_price_history.return_value = mock_df
+
+            # Mock predictor
+            mock_instance = MagicMock()
+            mock_instance.load_models.return_value = {"xgboost": True, "lstm": True}
+            mock_instance.predict.return_value = {
+                "direction": "UP",
+                "probability": 0.7,
+                "confidence": 0.75,
+                "confidence_level": "HIGH",
+                "model_agreement": True,
+                "contributions": {},
+            }
+            mock_predictor.return_value = mock_instance
+
+            # Run without --show-accuracy
+            result = runner.invoke(app, ["predict", "TSTN"])
+
+        # Should NOT show historical accuracy panel
+        assert result.exit_code == 0
+        assert "TSTN" in result.stdout.upper()
+        # Should not show "Historical Accuracy for" panel title
+        assert "Historical Accuracy for" not in result.stdout
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
