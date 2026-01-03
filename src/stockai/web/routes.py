@@ -14,6 +14,8 @@ from stockai import __version__
 from stockai.data.database import init_database
 from stockai.data.sources.yahoo import YahooFinanceSource
 from stockai.data.sources.idx import IDXIndexSource
+from stockai.web.schemas import WatchlistItemListResponse, WatchlistItemResponse
+from stockai.web.services.watchlist import get_watchlist_items
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +217,31 @@ async def get_prediction(symbol: str) -> dict:
     return {
         "symbol": symbol.upper(),
         "prediction": result,
+    }
+
+
+# ============ WATCHLIST API ROUTES ============
+
+
+@api_router.get("/watchlist", response_model=WatchlistItemListResponse)
+async def list_watchlist() -> dict:
+    """Get all watchlist items with associated stock information.
+
+    Returns array of watchlist items with stock details (symbol, name, sector).
+    """
+    init_database()
+
+    items = get_watchlist_items()
+
+    # Convert to response format
+    response_items = [
+        WatchlistItemResponse.model_validate(item)
+        for item in items
+    ]
+
+    return {
+        "count": len(response_items),
+        "items": response_items,
     }
 
 
