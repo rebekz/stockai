@@ -2131,6 +2131,394 @@ def agents_list() -> None:
     console.print(f"\n[dim]Total: {len(agents)} agents[/dim]")
 
 
+# Predictions subcommand group
+predictions_app = typer.Typer(help="Prediction accuracy tracking and management")
+app.add_typer(predictions_app, name="predictions")
+
+
+@predictions_app.command("accuracy")
+def predictions_accuracy(
+    symbol: str = typer.Option(None, "--symbol", "-s", help="Filter by stock symbol"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed model analysis"),
+) -> None:
+    """Show prediction accuracy metrics.
+
+    Displays overall accuracy statistics including breakdowns by
+    direction (UP/DOWN/NEUTRAL) and confidence level (HIGH/MEDIUM/LOW).
+
+    Examples:
+        stock predictions accuracy
+        stock predictions accuracy --symbol BBCA
+        stock predictions accuracy --verbose
+    """
+    from stockai.data.database import init_database
+    from stockai.core.predictor import PredictionAccuracyTracker
+
+    init_database()
+    tracker = PredictionAccuracyTracker()
+
+    if symbol:
+        # Show stock-specific accuracy
+        symbol = symbol.upper()
+        console.print(f"\n[bold]📊 Prediction Accuracy for {symbol}[/bold]\n")
+
+        metrics = tracker.get_stock_accuracy(symbol)
+
+        # Handle no predictions found
+        if metrics.get("message") and metrics.get("total_predictions", 0) == 0:
+            console.print(
+                Panel(
+                    f"[yellow]{metrics.get('message', 'No predictions found')}[/yellow]\n\n"
+                    "[dim]Run predictions first with:[/dim]\n"
+                    f"  stock predict {symbol}",
+                    title=f"📊 {symbol}",
+                    border_style="yellow",
+                )
+            )
+            return
+
+        # Display overall metrics
+        accuracy = metrics.get("accuracy_rate", 0)
+        if accuracy >= 60:
+            acc_color = "green"
+            acc_icon = "🟢"
+        elif accuracy >= 40:
+            acc_color = "yellow"
+            acc_icon = "🟡"
+        else:
+            acc_color = "red"
+            acc_icon = "🔴"
+
+        stock_name = metrics.get("stock_name", symbol)
+        console.print(
+            Panel(
+                f"[bold cyan]Stock:[/bold cyan] {symbol} ({stock_name})\n"
+                f"[bold cyan]Total Predictions:[/bold cyan] {metrics.get('total_predictions', 0)}\n"
+                f"[bold cyan]Correct:[/bold cyan] {metrics.get('correct_predictions', 0)}\n"
+                f"[bold cyan]Accuracy Rate:[/bold cyan] [{acc_color}]{acc_icon} {accuracy:.1f}%[/{acc_color}]",
+                title=f"📊 Accuracy Summary",
+                border_style="blue",
+            )
+        )
+
+        # Display accuracy by direction
+        by_direction = metrics.get("by_direction", {})
+        if any(by_direction.get(d, {}).get("total", 0) > 0 for d in ["UP", "DOWN", "NEUTRAL"]):
+            dir_table = Table(title="📈 Accuracy by Direction", show_header=True)
+            dir_table.add_column("Direction", style="cyan")
+            dir_table.add_column("Total", justify="right")
+            dir_table.add_column("Correct", justify="right")
+            dir_table.add_column("Accuracy", justify="right")
+
+            for direction in ["UP", "DOWN", "NEUTRAL"]:
+                stats = by_direction.get(direction, {})
+                total = stats.get("total", 0)
+                if total > 0:
+                    correct = stats.get("correct", 0)
+                    acc_rate = stats.get("accuracy_rate", 0)
+                    acc_str = f"{acc_rate:.1f}%"
+
+                    if direction == "UP":
+                        dir_icon = "📈"
+                    elif direction == "DOWN":
+                        dir_icon = "📉"
+                    else:
+                        dir_icon = "➡️"
+
+                    dir_table.add_row(
+                        f"{dir_icon} {direction}",
+                        str(total),
+                        str(correct),
+                        acc_str,
+                    )
+
+            console.print(dir_table)
+
+        # Display accuracy by confidence level
+        by_confidence = metrics.get("by_confidence", {})
+        if any(by_confidence.get(level, {}).get("total", 0) > 0 for level in ["HIGH", "MEDIUM", "LOW"]):
+            conf_table = Table(title="🎯 Accuracy by Confidence Level", show_header=True)
+            conf_table.add_column("Confidence", style="cyan")
+            conf_table.add_column("Total", justify="right")
+            conf_table.add_column("Correct", justify="right")
+            conf_table.add_column("Accuracy", justify="right")
+
+            for level in ["HIGH", "MEDIUM", "LOW"]:
+                stats = by_confidence.get(level, {})
+                total = stats.get("total", 0)
+                if total > 0:
+                    correct = stats.get("correct", 0)
+                    acc_rate = stats.get("accuracy_rate", 0)
+                    acc_str = f"{acc_rate:.1f}%"
+
+                    if level == "HIGH":
+                        level_icon = "🟢"
+                    elif level == "MEDIUM":
+                        level_icon = "🟡"
+                    else:
+                        level_icon = "🔴"
+
+                    conf_table.add_row(
+                        f"{level_icon} {level}",
+                        str(total),
+                        str(correct),
+                        acc_str,
+                    )
+
+            console.print(conf_table)
+
+        # Display recent predictions
+        recent = metrics.get("recent_predictions", [])
+        if recent:
+            console.print("\n[bold]📋 Recent Predictions[/bold]")
+            recent_table = Table(show_header=True)
+            recent_table.add_column("Date", style="dim", width=10)
+            recent_table.add_column("Predicted", justify="center")
+            recent_table.add_column("Actual", justify="center")
+            recent_table.add_column("Return", justify="right")
+            recent_table.add_column("Result", justify="center")
+
+            for pred in recent[:5]:
+                target_date = pred.get("target_date", "")[:10]
+
+                # Predicted direction
+                predicted = pred.get("direction", "?")
+                if predicted == "UP":
+                    pred_str = "[green]📈 UP[/green]"
+                elif predicted == "DOWN":
+                    pred_str = "[red]📉 DOWN[/red]"
+                else:
+                    pred_str = "[dim]➡️ NEUTRAL[/dim]"
+
+                # Actual direction
+                actual = pred.get("actual_direction", "?")
+                if actual == "UP":
+                    actual_str = "[green]📈 UP[/green]"
+                elif actual == "DOWN":
+                    actual_str = "[red]📉 DOWN[/red]"
+                else:
+                    actual_str = "[dim]➡️ NEUTRAL[/dim]"
+
+                # Return
+                actual_return = pred.get("actual_return")
+                if actual_return is not None:
+                    return_color = "green" if actual_return >= 0 else "red"
+                    return_str = f"[{return_color}]{actual_return:+.2f}%[/{return_color}]"
+                else:
+                    return_str = "[dim]-[/dim]"
+
+                # Result
+                is_correct = pred.get("is_correct")
+                if is_correct is True:
+                    result_str = "[green]✓ Correct[/green]"
+                elif is_correct is False:
+                    result_str = "[red]✗ Wrong[/red]"
+                else:
+                    result_str = "[dim]?[/dim]"
+
+                recent_table.add_row(target_date, pred_str, actual_str, return_str, result_str)
+
+            console.print(recent_table)
+
+        # Display accuracy trend if verbose
+        if verbose:
+            trend = metrics.get("accuracy_trend", [])
+            if trend:
+                console.print("\n[bold]📈 Monthly Accuracy Trend[/bold]")
+                trend_table = Table(show_header=True)
+                trend_table.add_column("Month", style="cyan")
+                trend_table.add_column("Total", justify="right")
+                trend_table.add_column("Correct", justify="right")
+                trend_table.add_column("Accuracy", justify="right")
+
+                for month_data in trend[-6:]:  # Last 6 months
+                    acc_rate = month_data.get("accuracy_rate", 0)
+                    if acc_rate >= 60:
+                        acc_str = f"[green]{acc_rate:.1f}%[/green]"
+                    elif acc_rate >= 40:
+                        acc_str = f"[yellow]{acc_rate:.1f}%[/yellow]"
+                    else:
+                        acc_str = f"[red]{acc_rate:.1f}%[/red]"
+
+                    trend_table.add_row(
+                        month_data.get("month", ""),
+                        str(month_data.get("total", 0)),
+                        str(month_data.get("correct", 0)),
+                        acc_str,
+                    )
+
+                console.print(trend_table)
+
+    else:
+        # Show overall accuracy
+        console.print("\n[bold]📊 Overall Prediction Accuracy[/bold]\n")
+
+        metrics = tracker.get_accuracy_metrics()
+
+        # Handle no predictions found
+        if metrics.get("message") and metrics.get("total_predictions", 0) == 0:
+            console.print(
+                Panel(
+                    f"[yellow]{metrics.get('message', 'No predictions found')}[/yellow]\n\n"
+                    "[dim]Run predictions first:[/dim]\n"
+                    "  stock predict BBCA\n"
+                    "  stock predict TLKM\n\n"
+                    "[dim]Then run backfill to update accuracy:[/dim]\n"
+                    "  stock predictions backfill",
+                    title="📊 Prediction Accuracy",
+                    border_style="yellow",
+                )
+            )
+            return
+
+        # Display overall metrics
+        accuracy = metrics.get("accuracy_rate", 0)
+        if accuracy >= 60:
+            acc_color = "green"
+            acc_icon = "🟢"
+        elif accuracy >= 40:
+            acc_color = "yellow"
+            acc_icon = "🟡"
+        else:
+            acc_color = "red"
+            acc_icon = "🔴"
+
+        console.print(
+            Panel(
+                f"[bold cyan]Total Predictions:[/bold cyan] {metrics.get('total_predictions', 0)}\n"
+                f"[bold cyan]Correct:[/bold cyan] {metrics.get('correct_predictions', 0)}\n"
+                f"[bold cyan]Accuracy Rate:[/bold cyan] [{acc_color}]{acc_icon} {accuracy:.1f}%[/{acc_color}]",
+                title="📊 Overall Accuracy",
+                border_style="blue",
+            )
+        )
+
+        # Display accuracy by direction
+        by_direction = metrics.get("by_direction", {})
+        dir_table = Table(title="📈 Accuracy by Direction", show_header=True)
+        dir_table.add_column("Direction", style="cyan")
+        dir_table.add_column("Total", justify="right")
+        dir_table.add_column("Correct", justify="right")
+        dir_table.add_column("Accuracy", justify="right")
+
+        for direction in ["UP", "DOWN", "NEUTRAL"]:
+            stats = by_direction.get(direction, {})
+            total = stats.get("total", 0)
+            correct = stats.get("correct", 0)
+            acc_rate = stats.get("accuracy_rate", 0)
+            acc_str = f"{acc_rate:.1f}%"
+
+            if direction == "UP":
+                dir_icon = "📈"
+            elif direction == "DOWN":
+                dir_icon = "📉"
+            else:
+                dir_icon = "➡️"
+
+            dir_table.add_row(
+                f"{dir_icon} {direction}",
+                str(total),
+                str(correct),
+                acc_str,
+            )
+
+        console.print(dir_table)
+
+        # Display accuracy by confidence level
+        by_confidence = metrics.get("by_confidence", {})
+        conf_table = Table(title="🎯 Accuracy by Confidence Level", show_header=True)
+        conf_table.add_column("Confidence", style="cyan")
+        conf_table.add_column("Total", justify="right")
+        conf_table.add_column("Correct", justify="right")
+        conf_table.add_column("Accuracy", justify="right")
+
+        for level in ["HIGH", "MEDIUM", "LOW"]:
+            stats = by_confidence.get(level, {})
+            total = stats.get("total", 0)
+            correct = stats.get("correct", 0)
+            acc_rate = stats.get("accuracy_rate", 0)
+            acc_str = f"{acc_rate:.1f}%"
+
+            if level == "HIGH":
+                level_icon = "🟢"
+            elif level == "MEDIUM":
+                level_icon = "🟡"
+            else:
+                level_icon = "🔴"
+
+            conf_table.add_row(
+                f"{level_icon} {level}",
+                str(total),
+                str(correct),
+                acc_str,
+            )
+
+        console.print(conf_table)
+
+        # Show model analysis if verbose
+        if verbose:
+            console.print("\n[bold]🔬 Model Component Analysis[/bold]")
+
+            model_analysis = tracker.get_accuracy_by_model()
+
+            # Display insights
+            insights = model_analysis.get("insights", [])
+            if insights:
+                console.print("\n[bold]💡 Insights:[/bold]")
+                for insight in insights:
+                    console.print(f"  • {insight}")
+
+            # Display correlation summary
+            corr_summary = model_analysis.get("correlation_summary", {})
+            corr_table = Table(title="📊 Model Correlation with Accuracy", show_header=True)
+            corr_table.add_column("Model", style="cyan")
+            corr_table.add_column("Correlation", justify="center")
+            corr_table.add_column("Low Bins Acc", justify="right")
+            corr_table.add_column("High Bins Acc", justify="right")
+            corr_table.add_column("Difference", justify="right")
+
+            for model_name, corr in [
+                ("XGBoost", corr_summary.get("xgboost", {})),
+                ("LSTM", corr_summary.get("lstm", {})),
+                ("Sentiment", corr_summary.get("sentiment", {})),
+            ]:
+                has_corr = corr.get("has_correlation")
+                direction = corr.get("direction", "?")
+
+                if has_corr is True:
+                    if direction == "positive":
+                        corr_str = "[green]↑ Positive[/green]"
+                    else:
+                        corr_str = "[red]↓ Negative[/red]"
+                elif has_corr is False:
+                    corr_str = "[dim]~ Weak[/dim]"
+                else:
+                    corr_str = "[dim]N/A[/dim]"
+
+                low_acc = corr.get("low_accuracy")
+                high_acc = corr.get("high_accuracy")
+                diff = corr.get("difference")
+
+                low_str = f"{low_acc:.1f}%" if low_acc is not None else "[dim]-[/dim]"
+                high_str = f"{high_acc:.1f}%" if high_acc is not None else "[dim]-[/dim]"
+
+                if diff is not None:
+                    if diff > 0:
+                        diff_str = f"[green]+{diff:.1f}%[/green]"
+                    elif diff < 0:
+                        diff_str = f"[red]{diff:.1f}%[/red]"
+                    else:
+                        diff_str = "0.0%"
+                else:
+                    diff_str = "[dim]-[/dim]"
+
+                corr_table.add_row(model_name, corr_str, low_str, high_str, diff_str)
+
+            console.print(corr_table)
+
+    console.print()
+
+
 # Watchlist subcommand group
 watchlist_app = typer.Typer(help="Manage stock watchlist")
 app.add_typer(watchlist_app, name="watchlist")
