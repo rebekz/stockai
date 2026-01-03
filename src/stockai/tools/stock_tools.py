@@ -216,6 +216,165 @@ def get_technical_indicators(symbol: str, period: str = "3mo") -> dict[str, Any]
         return {"error": str(e)}
 
 
+@stockai_tool(name="get_volume_analysis", category="analysis")
+def get_volume_analysis(symbol: str, period: str = "3mo") -> dict[str, Any]:
+    """Analyze volume-based indicators for a stock.
+
+    Computes On-Balance Volume (OBV), VWAP, Accumulation/Distribution Line,
+    Money Flow Index (MFI), and volume ratios relative to moving averages.
+
+    Args:
+        symbol: Stock ticker symbol
+        period: Period for calculation (default 3mo for sufficient data)
+
+    Returns:
+        Dictionary with volume indicator values and signals
+    """
+    logger.info(f"Calculating volume analysis for {symbol}")
+
+    df = _yahoo.get_price_history(symbol, period=period)
+
+    if df.empty or len(df) < 20:
+        return {"error": f"Insufficient data for volume analysis of {symbol}"}
+
+    try:
+        import ta
+
+        close = df["close"]
+        high = df["high"]
+        low = df["low"]
+        volume = df["volume"]
+
+        # On-Balance Volume (OBV)
+        obv = ta.volume.OnBalanceVolumeIndicator(close, volume)
+        obv_values = obv.on_balance_volume()
+        current_obv = obv_values.iloc[-1]
+        obv_sma5 = obv_values.rolling(5).mean().iloc[-1]
+
+        # OBV trend interpretation
+        obv_prev = obv_values.iloc[-5] if len(obv_values) >= 5 else obv_values.iloc[0]
+        obv_change_pct = ((current_obv - obv_prev) / abs(obv_prev) * 100) if obv_prev != 0 else 0
+        obv_trend = "rising" if current_obv > obv_sma5 else "falling"
+
+        # Volume Weighted Average Price (VWAP)
+        vwap = ta.volume.VolumeWeightedAveragePrice(high, low, close, volume)
+        current_vwap = vwap.volume_weighted_average_price().iloc[-1]
+
+        # Accumulation/Distribution Line
+        ad = ta.volume.AccDistIndexIndicator(high, low, close, volume)
+        ad_values = ad.acc_dist_index()
+        current_ad = ad_values.iloc[-1]
+        ad_sma5 = ad_values.rolling(5).mean().iloc[-1]
+        ad_trend = "accumulation" if current_ad > ad_sma5 else "distribution"
+
+        # Money Flow Index (MFI)
+        mfi = ta.volume.MFIIndicator(high, low, close, volume, window=14)
+        current_mfi = mfi.money_flow_index().iloc[-1]
+
+        # MFI interpretation
+        if current_mfi < 20:
+            mfi_interpretation = "oversold"
+        elif current_mfi > 80:
+            mfi_interpretation = "overbought"
+        else:
+            mfi_interpretation = "neutral"
+
+        # Volume Ratios
+        vol_sma5 = volume.rolling(5).mean().iloc[-1]
+        vol_sma10 = volume.rolling(10).mean().iloc[-1]
+        vol_sma20 = volume.rolling(20).mean().iloc[-1]
+        current_volume = volume.iloc[-1]
+
+        volume_ratio_5d = current_volume / vol_sma5 if vol_sma5 > 0 else 0
+        volume_ratio_10d = current_volume / vol_sma10 if vol_sma10 > 0 else 0
+        volume_ratio_20d = current_volume / vol_sma20 if vol_sma20 > 0 else 0
+
+        current_price = close.iloc[-1]
+
+        # Generate signals
+        signals = []
+
+        # MFI signals
+        if current_mfi < 20:
+            signals.append("🟢 MFI oversold (potential buy)")
+        elif current_mfi > 80:
+            signals.append("🔴 MFI overbought (potential sell)")
+
+        # OBV trend signals
+        if obv_trend == "rising" and close.iloc[-1] > close.iloc[-5]:
+            signals.append("🟢 OBV confirming price uptrend")
+        elif obv_trend == "falling" and close.iloc[-1] < close.iloc[-5]:
+            signals.append("🔴 OBV confirming price downtrend")
+        elif obv_trend == "rising" and close.iloc[-1] < close.iloc[-5]:
+            signals.append("🟢 OBV divergence (bullish)")
+        elif obv_trend == "falling" and close.iloc[-1] > close.iloc[-5]:
+            signals.append("🔴 OBV divergence (bearish)")
+
+        # A/D line signals
+        if ad_trend == "accumulation":
+            signals.append("🟢 Accumulation detected (buying pressure)")
+        else:
+            signals.append("🔴 Distribution detected (selling pressure)")
+
+        # VWAP signals
+        if current_price > current_vwap:
+            signals.append("🟢 Price above VWAP (bullish)")
+        else:
+            signals.append("🔴 Price below VWAP (bearish)")
+
+        # Volume spike signals
+        if volume_ratio_20d > 2.0:
+            signals.append("⚠️ Volume spike (>2x average)")
+        elif volume_ratio_20d < 0.5:
+            signals.append("⚠️ Low volume (<0.5x average)")
+
+        return {
+            "symbol": symbol.upper(),
+            "current_price": current_price,
+            "current_volume": int(current_volume),
+            "indicators": {
+                "obv": {
+                    "value": round(current_obv, 2),
+                    "sma5": round(obv_sma5, 2),
+                    "change_pct_5d": round(obv_change_pct, 2),
+                    "trend": obv_trend,
+                    "interpretation": "bullish" if obv_trend == "rising" else "bearish",
+                },
+                "vwap": {
+                    "value": round(current_vwap, 2),
+                    "price_position": "above" if current_price > current_vwap else "below",
+                    "interpretation": "bullish" if current_price > current_vwap else "bearish",
+                },
+                "accumulation_distribution": {
+                    "value": round(current_ad, 2),
+                    "sma5": round(ad_sma5, 2),
+                    "trend": ad_trend,
+                    "interpretation": "bullish" if ad_trend == "accumulation" else "bearish",
+                },
+                "mfi": {
+                    "value": round(current_mfi, 2),
+                    "interpretation": mfi_interpretation,
+                },
+                "volume_ratios": {
+                    "vs_5d_avg": round(volume_ratio_5d, 2),
+                    "vs_10d_avg": round(volume_ratio_10d, 2),
+                    "vs_20d_avg": round(volume_ratio_20d, 2),
+                    "avg_volume_5d": int(vol_sma5),
+                    "avg_volume_10d": int(vol_sma10),
+                    "avg_volume_20d": int(vol_sma20),
+                },
+            },
+            "signals": signals,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    except ImportError:
+        return {"error": "Technical analysis library not available"}
+    except Exception as e:
+        logger.error(f"Volume analysis failed: {e}")
+        return {"error": str(e)}
+
+
 @stockai_tool(name="get_idx30_stocks", category="index")
 def get_idx30_stocks() -> dict[str, Any]:
     """Get list of IDX30 index components.
