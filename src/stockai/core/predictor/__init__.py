@@ -5,8 +5,10 @@ Provides ML-based prediction capabilities:
 - XGBoost classifier
 - LSTM sequence model
 - Ensemble predictor
+- Prediction accuracy tracking
 """
 
+from stockai.core.predictor.accuracy import PredictionAccuracyTracker
 from stockai.core.predictor.features import FeatureEngineer, generate_features
 from stockai.core.predictor.xgboost_model import XGBoostPredictor
 from stockai.core.predictor.lstm_model import LSTMPredictor
@@ -18,4 +20,5 @@ __all__ = [
     "XGBoostPredictor",
     "LSTMPredictor",
     "EnsemblePredictor",
+    "PredictionAccuracyTracker",
 ]
