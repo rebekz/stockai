@@ -1792,6 +1792,345 @@ def sentiment_market() -> None:
     )
 
 
+# Multi-Agent Trading subcommand group
+agents_app = typer.Typer(help="Multi-agent trading analysis system")
+app.add_typer(agents_app, name="agents")
+
+
+@agents_app.command("analyze")
+def agents_analyze(
+    symbol: str = typer.Argument(..., help="Stock symbol to analyze"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed agent outputs"),
+) -> None:
+    """Run full multi-agent analysis on a stock.
+
+    Uses 7 specialized AI agents to analyze:
+    - Fundamentals (research agent)
+    - Technical indicators (technical analyst)
+    - News sentiment (sentiment analyst)
+    - Portfolio fit (portfolio manager)
+    - Risk assessment (risk manager)
+    - Final trading signal (trading execution)
+
+    Examples:
+        stock agents analyze BBCA
+        stock agents analyze TLKM --verbose
+    """
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.markdown import Markdown
+
+    from stockai.agents import create_trading_orchestrator
+    from stockai.config import get_settings
+
+    symbol = symbol.upper()
+    settings = get_settings()
+
+    # Check API key
+    if not settings.has_google_api:
+        console.print("[red]Error:[/red] Google API key not configured.")
+        console.print("Set GOOGLE_API_KEY in your .env file or environment.")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]🤖 Multi-Agent Analysis: {symbol}[/bold]\n")
+    console.print("[dim]Running 7 specialized agents for comprehensive analysis...[/dim]\n")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=not verbose,
+        ) as progress:
+            task = progress.add_task("Initializing orchestrator...", total=None)
+
+            orchestrator = create_trading_orchestrator()
+
+            progress.update(task, description="Running multi-agent analysis...")
+
+            result = orchestrator.run(
+                query=f"Provide comprehensive trading analysis for {symbol}",
+                symbol=symbol,
+            )
+
+        if result.get("success"):
+            # Display recommendation
+            recommendation = result.get("recommendation")
+            score = result.get("composite_score", 0)
+
+            if recommendation:
+                if "BUY" in recommendation:
+                    rec_color = "green"
+                elif "SELL" in recommendation:
+                    rec_color = "red"
+                else:
+                    rec_color = "yellow"
+
+                console.print(
+                    Panel(
+                        f"[bold {rec_color}]{recommendation}[/bold {rec_color}]\n\n"
+                        f"[bold cyan]Composite Score:[/bold cyan] {score:.1f}/10\n"
+                        f"[bold cyan]Agents Executed:[/bold cyan] {len(result.get('agents_executed', []))}",
+                        title=f"🎯 {symbol} Trading Signal",
+                        border_style=rec_color,
+                    )
+                )
+
+            # Display full analysis
+            answer = result.get("answer", "")
+            if answer:
+                console.print()
+                md = Markdown(answer)
+                console.print(md)
+
+            # Stats
+            if verbose:
+                console.print(f"\n[dim]Started: {result.get('started_at')}[/dim]")
+                console.print(f"[dim]Completed: {result.get('completed_at')}[/dim]")
+                console.print(f"[dim]Agents: {', '.join(result.get('agents_executed', []))}[/dim]")
+        else:
+            error = result.get("error", "Unknown error")
+            console.print(f"[red]Analysis failed:[/red] {error}")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        if verbose:
+            import traceback
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        raise typer.Exit(1)
+
+
+@agents_app.command("scan")
+def agents_scan(
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index to scan (IDX30, LQ45)"),
+    top: int = typer.Option(5, "--top", "-t", help="Number of top opportunities"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed outputs"),
+) -> None:
+    """Scan market for trading opportunities.
+
+    Uses Market Scanner agent to identify:
+    - Volume spikes
+    - Breakout patterns
+    - Sector rotations
+    - Momentum plays
+
+    Examples:
+        stock agents scan
+        stock agents scan --index LQ45 --top 10
+    """
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+
+    from stockai.agents import create_trading_orchestrator
+    from stockai.config import get_settings
+
+    index = index.upper()
+    settings = get_settings()
+
+    if not settings.has_google_api:
+        console.print("[red]Error:[/red] Google API key not configured.")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]🔍 Scanning {index} for Opportunities[/bold]\n")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Running Market Scanner...", total=None)
+
+            orchestrator = create_trading_orchestrator()
+
+            result = orchestrator.run(
+                query=f"Scan {index} for top {top} trading opportunities with volume spikes, breakouts, or momentum signals",
+            )
+
+        if result.get("success"):
+            answer = result.get("answer", "No opportunities found.")
+            from rich.markdown import Markdown
+            console.print(Markdown(answer))
+        else:
+            console.print(f"[red]Scan failed:[/red] {result.get('error', 'Unknown error')}")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+@agents_app.command("recommend")
+def agents_recommend(
+    symbol: str = typer.Argument(..., help="Stock symbol"),
+) -> None:
+    """Get buy/sell recommendation for a stock.
+
+    Runs full agent pipeline and provides:
+    - Clear BUY/SELL/HOLD recommendation
+    - Entry and exit points
+    - Position sizing suggestion
+    - Stop-loss levels
+
+    Examples:
+        stock agents recommend BBCA
+        stock agents recommend TLKM
+    """
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.markdown import Markdown
+
+    from stockai.agents import create_trading_orchestrator
+    from stockai.config import get_settings
+
+    symbol = symbol.upper()
+    settings = get_settings()
+
+    if not settings.has_google_api:
+        console.print("[red]Error:[/red] Google API key not configured.")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]💡 Getting Trading Recommendation: {symbol}[/bold]\n")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Analyzing with trading agents...", total=None)
+
+            orchestrator = create_trading_orchestrator()
+
+            result = orchestrator.run(
+                query=f"Should I buy or sell {symbol}? Provide specific entry/exit points, position size, and stop-loss.",
+                symbol=symbol,
+            )
+
+        if result.get("success"):
+            recommendation = result.get("recommendation")
+            score = result.get("composite_score", 0)
+
+            if recommendation:
+                if "BUY" in recommendation:
+                    rec_color = "green"
+                    rec_icon = "📈"
+                elif "SELL" in recommendation:
+                    rec_color = "red"
+                    rec_icon = "📉"
+                else:
+                    rec_color = "yellow"
+                    rec_icon = "➡️"
+
+                console.print(
+                    Panel(
+                        f"[bold {rec_color}]{rec_icon} {recommendation}[/bold {rec_color}]\n\n"
+                        f"[bold]Composite Score:[/bold] {score:.1f}/10",
+                        title=f"💡 Recommendation: {symbol}",
+                        border_style=rec_color,
+                    )
+                )
+
+            answer = result.get("answer", "")
+            if answer:
+                console.print()
+                console.print(Markdown(answer))
+        else:
+            console.print(f"[red]Failed:[/red] {result.get('error', 'Unknown error')}")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+@agents_app.command("risk")
+def agents_risk(
+    symbol: str = typer.Argument(..., help="Stock symbol"),
+) -> None:
+    """Assess risk for a stock position.
+
+    Uses Risk Manager agent to evaluate:
+    - Volatility metrics
+    - Value at Risk (VaR)
+    - Maximum drawdown
+    - Stop-loss recommendations
+
+    Examples:
+        stock agents risk BBCA
+    """
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.markdown import Markdown
+
+    from stockai.agents import create_trading_orchestrator
+    from stockai.config import get_settings
+
+    symbol = symbol.upper()
+    settings = get_settings()
+
+    if not settings.has_google_api:
+        console.print("[red]Error:[/red] Google API key not configured.")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]⚠️ Risk Assessment: {symbol}[/bold]\n")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Running Risk Manager...", total=None)
+
+            orchestrator = create_trading_orchestrator()
+
+            result = orchestrator.run(
+                query=f"What are the risks of investing in {symbol}? Provide detailed risk assessment with stop-loss recommendations.",
+                symbol=symbol,
+            )
+
+        if result.get("success"):
+            answer = result.get("answer", "")
+            if answer:
+                console.print(Markdown(answer))
+        else:
+            console.print(f"[red]Failed:[/red] {result.get('error', 'Unknown error')}")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
+@agents_app.command("list")
+def agents_list() -> None:
+    """List all available trading agents.
+
+    Shows the 7 specialized agents in the system.
+    """
+    from stockai.agents import get_all_subagents
+
+    agents = get_all_subagents()
+
+    table = Table(title="🤖 StockAI Trading Agents", show_header=True)
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Agent", style="cyan")
+    table.add_column("Description")
+    table.add_column("Tools", justify="right", style="dim")
+
+    for i, agent in enumerate(agents, 1):
+        table.add_row(
+            str(i),
+            agent["name"],
+            agent["description"][:70] + "..." if len(agent["description"]) > 70 else agent["description"],
+            str(len(agent["tools"])),
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]Total: {len(agents)} agents[/dim]")
+
+
 # Watchlist subcommand group
 watchlist_app = typer.Typer(help="Manage stock watchlist")
 app.add_typer(watchlist_app, name="watchlist")
