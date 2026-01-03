@@ -556,6 +556,404 @@ def get_volume_profile(symbol: str, period: str = "1mo", num_levels: int = 20) -
         return {"error": str(e)}
 
 
+@stockai_tool(name="get_volume_signals", category="analysis")
+def get_volume_signals(symbol: str, period: str = "3mo") -> dict[str, Any]:
+    """Generate actionable volume-based trading signals.
+
+    Combines multiple volume indicators to produce buy/sell/neutral signals
+    with confidence scores. Analyzes volume spikes, volume-price divergences,
+    and accumulation/distribution patterns.
+
+    Args:
+        symbol: Stock ticker symbol
+        period: Period for calculation (default 3mo for sufficient data)
+
+    Returns:
+        Dictionary with volume signals, confidence scores, and overall recommendation
+    """
+    logger.info(f"Generating volume signals for {symbol}")
+
+    df = _yahoo.get_price_history(symbol, period=period)
+
+    if df.empty or len(df) < 20:
+        return {"error": f"Insufficient data for volume signals of {symbol}"}
+
+    try:
+        import ta
+        import numpy as np
+
+        close = df["close"]
+        high = df["high"]
+        low = df["low"]
+        volume = df["volume"]
+
+        current_price = close.iloc[-1]
+        current_volume = volume.iloc[-1]
+
+        # Initialize signal tracking
+        individual_signals = []
+        bullish_score = 0
+        bearish_score = 0
+        total_weight = 0
+
+        # =============================================================
+        # 1. VOLUME SPIKE DETECTION
+        # =============================================================
+        vol_sma20 = volume.rolling(20).mean().iloc[-1]
+        vol_sma5 = volume.rolling(5).mean().iloc[-1]
+        volume_ratio_20d = current_volume / vol_sma20 if vol_sma20 > 0 else 1.0
+
+        # Check volume spike
+        is_volume_spike = volume_ratio_20d > 2.0
+        is_low_volume = volume_ratio_20d < 0.5
+
+        # Determine if spike is bullish or bearish based on price action
+        price_change_today = close.iloc[-1] - close.iloc[-2] if len(close) >= 2 else 0
+        price_up_today = price_change_today > 0
+
+        spike_signal = None
+        spike_confidence = 0
+        if is_volume_spike:
+            spike_confidence = min(0.9, 0.5 + (volume_ratio_20d - 2.0) * 0.1)
+            if price_up_today:
+                spike_signal = {
+                    "type": "volume_spike",
+                    "direction": "bullish",
+                    "description": "Volume spike with price increase - strong buying interest",
+                    "confidence": round(spike_confidence, 2),
+                    "details": {
+                        "volume_ratio": round(volume_ratio_20d, 2),
+                        "price_change": round(price_change_today, 2),
+                    },
+                }
+                bullish_score += spike_confidence * 2.0  # Weight: 2.0
+            else:
+                spike_signal = {
+                    "type": "volume_spike",
+                    "direction": "bearish",
+                    "description": "Volume spike with price decrease - strong selling pressure",
+                    "confidence": round(spike_confidence, 2),
+                    "details": {
+                        "volume_ratio": round(volume_ratio_20d, 2),
+                        "price_change": round(price_change_today, 2),
+                    },
+                }
+                bearish_score += spike_confidence * 2.0
+            individual_signals.append(spike_signal)
+            total_weight += 2.0
+        elif is_low_volume:
+            individual_signals.append({
+                "type": "low_volume",
+                "direction": "neutral",
+                "description": "Low trading volume - weak conviction",
+                "confidence": 0.5,
+                "details": {
+                    "volume_ratio": round(volume_ratio_20d, 2),
+                },
+            })
+            total_weight += 1.0
+
+        # =============================================================
+        # 2. VOLUME-PRICE DIVERGENCE
+        # =============================================================
+        lookback = 10
+        if len(df) >= lookback:
+            # Calculate price and volume trends over lookback period
+            price_start = close.iloc[-lookback]
+            price_end = close.iloc[-1]
+            price_trend = (price_end - price_start) / price_start * 100
+
+            vol_start = volume.iloc[-lookback:-5].mean()
+            vol_end = volume.iloc[-5:].mean()
+            vol_trend = (vol_end - vol_start) / vol_start * 100 if vol_start > 0 else 0
+
+            # Detect divergences
+            divergence_signal = None
+            if price_trend > 3 and vol_trend < -20:
+                # Price up, volume declining - bearish divergence
+                divergence_confidence = min(0.85, 0.5 + abs(vol_trend) * 0.01)
+                divergence_signal = {
+                    "type": "volume_price_divergence",
+                    "direction": "bearish",
+                    "description": "Price rising on declining volume - weakening uptrend",
+                    "confidence": round(divergence_confidence, 2),
+                    "details": {
+                        "price_change_pct": round(price_trend, 2),
+                        "volume_change_pct": round(vol_trend, 2),
+                    },
+                }
+                bearish_score += divergence_confidence * 1.5
+                total_weight += 1.5
+            elif price_trend < -3 and vol_trend < -20:
+                # Price down, volume declining - bullish divergence (selling exhaustion)
+                divergence_confidence = min(0.8, 0.5 + abs(vol_trend) * 0.01)
+                divergence_signal = {
+                    "type": "volume_price_divergence",
+                    "direction": "bullish",
+                    "description": "Price falling on declining volume - selling exhaustion",
+                    "confidence": round(divergence_confidence, 2),
+                    "details": {
+                        "price_change_pct": round(price_trend, 2),
+                        "volume_change_pct": round(vol_trend, 2),
+                    },
+                }
+                bullish_score += divergence_confidence * 1.5
+                total_weight += 1.5
+            elif price_trend > 3 and vol_trend > 20:
+                # Price up, volume increasing - confirming uptrend
+                divergence_confidence = min(0.85, 0.5 + vol_trend * 0.01)
+                divergence_signal = {
+                    "type": "volume_confirmation",
+                    "direction": "bullish",
+                    "description": "Price rising with increasing volume - strong uptrend confirmation",
+                    "confidence": round(divergence_confidence, 2),
+                    "details": {
+                        "price_change_pct": round(price_trend, 2),
+                        "volume_change_pct": round(vol_trend, 2),
+                    },
+                }
+                bullish_score += divergence_confidence * 1.5
+                total_weight += 1.5
+            elif price_trend < -3 and vol_trend > 20:
+                # Price down, volume increasing - confirming downtrend
+                divergence_confidence = min(0.85, 0.5 + vol_trend * 0.01)
+                divergence_signal = {
+                    "type": "volume_confirmation",
+                    "direction": "bearish",
+                    "description": "Price falling with increasing volume - strong downtrend confirmation",
+                    "confidence": round(divergence_confidence, 2),
+                    "details": {
+                        "price_change_pct": round(price_trend, 2),
+                        "volume_change_pct": round(vol_trend, 2),
+                    },
+                }
+                bearish_score += divergence_confidence * 1.5
+                total_weight += 1.5
+
+            if divergence_signal:
+                individual_signals.append(divergence_signal)
+
+        # =============================================================
+        # 3. ACCUMULATION/DISTRIBUTION PATTERN
+        # =============================================================
+        ad = ta.volume.AccDistIndexIndicator(high, low, close, volume)
+        ad_values = ad.acc_dist_index()
+        current_ad = ad_values.iloc[-1]
+
+        # Calculate A/D trend over multiple periods
+        ad_sma5 = ad_values.rolling(5).mean().iloc[-1]
+        ad_sma10 = ad_values.rolling(10).mean().iloc[-1] if len(ad_values) >= 10 else ad_sma5
+        ad_trend_short = current_ad > ad_sma5
+        ad_trend_long = ad_sma5 > ad_sma10
+
+        # Determine accumulation/distribution pattern
+        if ad_trend_short and ad_trend_long:
+            ad_confidence = 0.75
+            ad_signal = {
+                "type": "accumulation",
+                "direction": "bullish",
+                "description": "Strong accumulation pattern - institutional buying",
+                "confidence": round(ad_confidence, 2),
+                "details": {
+                    "ad_value": round(current_ad, 2),
+                    "ad_sma5": round(ad_sma5, 2),
+                    "trend": "rising",
+                },
+            }
+            bullish_score += ad_confidence * 1.5
+        elif not ad_trend_short and not ad_trend_long:
+            ad_confidence = 0.75
+            ad_signal = {
+                "type": "distribution",
+                "direction": "bearish",
+                "description": "Strong distribution pattern - institutional selling",
+                "confidence": round(ad_confidence, 2),
+                "details": {
+                    "ad_value": round(current_ad, 2),
+                    "ad_sma5": round(ad_sma5, 2),
+                    "trend": "falling",
+                },
+            }
+            bearish_score += ad_confidence * 1.5
+        else:
+            ad_confidence = 0.5
+            ad_signal = {
+                "type": "mixed_accumulation",
+                "direction": "neutral",
+                "description": "Mixed accumulation/distribution - unclear pattern",
+                "confidence": round(ad_confidence, 2),
+                "details": {
+                    "ad_value": round(current_ad, 2),
+                    "ad_sma5": round(ad_sma5, 2),
+                    "trend": "mixed",
+                },
+            }
+
+        individual_signals.append(ad_signal)
+        total_weight += 1.5
+
+        # =============================================================
+        # 4. MONEY FLOW INDEX (MFI) ANALYSIS
+        # =============================================================
+        mfi = ta.volume.MFIIndicator(high, low, close, volume, window=14)
+        current_mfi = mfi.money_flow_index().iloc[-1]
+
+        mfi_signal = None
+        if current_mfi < 20:
+            mfi_confidence = min(0.85, 0.6 + (20 - current_mfi) * 0.02)
+            mfi_signal = {
+                "type": "mfi_oversold",
+                "direction": "bullish",
+                "description": "MFI oversold - potential buying opportunity",
+                "confidence": round(mfi_confidence, 2),
+                "details": {
+                    "mfi_value": round(current_mfi, 2),
+                    "threshold": 20,
+                },
+            }
+            bullish_score += mfi_confidence * 1.5
+            total_weight += 1.5
+        elif current_mfi > 80:
+            mfi_confidence = min(0.85, 0.6 + (current_mfi - 80) * 0.02)
+            mfi_signal = {
+                "type": "mfi_overbought",
+                "direction": "bearish",
+                "description": "MFI overbought - potential selling signal",
+                "confidence": round(mfi_confidence, 2),
+                "details": {
+                    "mfi_value": round(current_mfi, 2),
+                    "threshold": 80,
+                },
+            }
+            bearish_score += mfi_confidence * 1.5
+            total_weight += 1.5
+        else:
+            mfi_signal = {
+                "type": "mfi_neutral",
+                "direction": "neutral",
+                "description": "MFI in neutral zone",
+                "confidence": 0.5,
+                "details": {
+                    "mfi_value": round(current_mfi, 2),
+                },
+            }
+            total_weight += 1.0
+
+        individual_signals.append(mfi_signal)
+
+        # =============================================================
+        # 5. OBV TREND ANALYSIS
+        # =============================================================
+        obv = ta.volume.OnBalanceVolumeIndicator(close, volume)
+        obv_values = obv.on_balance_volume()
+        current_obv = obv_values.iloc[-1]
+        obv_sma5 = obv_values.rolling(5).mean().iloc[-1]
+        obv_sma10 = obv_values.rolling(10).mean().iloc[-1] if len(obv_values) >= 10 else obv_sma5
+
+        obv_bullish = current_obv > obv_sma5 > obv_sma10
+        obv_bearish = current_obv < obv_sma5 < obv_sma10
+
+        if obv_bullish:
+            obv_confidence = 0.7
+            obv_signal = {
+                "type": "obv_bullish_trend",
+                "direction": "bullish",
+                "description": "OBV in strong uptrend - money flowing in",
+                "confidence": round(obv_confidence, 2),
+                "details": {
+                    "obv_value": round(current_obv, 2),
+                    "obv_sma5": round(obv_sma5, 2),
+                },
+            }
+            bullish_score += obv_confidence * 1.0
+        elif obv_bearish:
+            obv_confidence = 0.7
+            obv_signal = {
+                "type": "obv_bearish_trend",
+                "direction": "bearish",
+                "description": "OBV in strong downtrend - money flowing out",
+                "confidence": round(obv_confidence, 2),
+                "details": {
+                    "obv_value": round(current_obv, 2),
+                    "obv_sma5": round(obv_sma5, 2),
+                },
+            }
+            bearish_score += obv_confidence * 1.0
+        else:
+            obv_confidence = 0.5
+            obv_signal = {
+                "type": "obv_neutral",
+                "direction": "neutral",
+                "description": "OBV trend unclear",
+                "confidence": round(obv_confidence, 2),
+                "details": {
+                    "obv_value": round(current_obv, 2),
+                    "obv_sma5": round(obv_sma5, 2),
+                },
+            }
+
+        individual_signals.append(obv_signal)
+        total_weight += 1.0
+
+        # =============================================================
+        # CALCULATE OVERALL SIGNAL
+        # =============================================================
+        if total_weight > 0:
+            normalized_bullish = bullish_score / total_weight
+            normalized_bearish = bearish_score / total_weight
+        else:
+            normalized_bullish = 0
+            normalized_bearish = 0
+
+        # Calculate net signal and confidence
+        net_signal = normalized_bullish - normalized_bearish
+        overall_confidence = abs(net_signal)
+
+        # Determine direction
+        if net_signal > 0.15:
+            overall_direction = "buy"
+            overall_description = "Volume indicators suggest buying opportunity"
+        elif net_signal < -0.15:
+            overall_direction = "sell"
+            overall_description = "Volume indicators suggest selling pressure"
+        else:
+            overall_direction = "neutral"
+            overall_description = "Volume indicators are mixed - no clear signal"
+
+        # Count signals by direction
+        bullish_count = sum(1 for s in individual_signals if s["direction"] == "bullish")
+        bearish_count = sum(1 for s in individual_signals if s["direction"] == "bearish")
+        neutral_count = sum(1 for s in individual_signals if s["direction"] == "neutral")
+
+        return {
+            "symbol": symbol.upper(),
+            "current_price": round(current_price, 2),
+            "current_volume": int(current_volume),
+            "volume_ratio_20d": round(volume_ratio_20d, 2),
+            "overall_signal": {
+                "direction": overall_direction,
+                "description": overall_description,
+                "confidence": round(min(0.95, overall_confidence), 2),
+                "bullish_score": round(normalized_bullish, 2),
+                "bearish_score": round(normalized_bearish, 2),
+            },
+            "signal_summary": {
+                "bullish_signals": bullish_count,
+                "bearish_signals": bearish_count,
+                "neutral_signals": neutral_count,
+                "total_signals": len(individual_signals),
+            },
+            "individual_signals": individual_signals,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    except ImportError:
+        return {"error": "Technical analysis library not available"}
+    except Exception as e:
+        logger.error(f"Volume signals generation failed: {e}")
+        return {"error": str(e)}
+
+
 @stockai_tool(name="get_idx30_stocks", category="index")
 def get_idx30_stocks() -> dict[str, Any]:
     """Get list of IDX30 index components.
