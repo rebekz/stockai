@@ -2103,6 +2103,243 @@ def agents_risk(
         raise typer.Exit(1)
 
 
+@agents_app.command("daily")
+def agents_daily(
+    capital: int = typer.Argument(..., help="Investment capital in Rupiah (e.g., 1000000)"),
+    horizon: str = typer.Option("both", "--horizon", "-h", help="Investment horizon: short, long, or both"),
+    holdings: str = typer.Option(None, "--holdings", help="Current holdings to check for sell signals (e.g., 'BBCA,TLKM')"),
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index to scan (IDX30, LQ45)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed analysis"),
+) -> None:
+    """Daily trading recommendations based on your capital.
+
+    Scans the market and provides personalized portfolio allocation
+    with specific buy/sell recommendations for both short-term
+    and long-term strategies.
+
+    Examples:
+        stock agents daily 1000000
+        stock agents daily 5000000 --horizon short
+        stock agents daily 10000000 --holdings "BBCA,TLKM"
+        stock agents daily 50000000 --horizon long --index LQ45
+    """
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.markdown import Markdown
+
+    from stockai.agents import create_trading_orchestrator
+    from stockai.config import get_settings
+
+    settings = get_settings()
+
+    if not settings.has_google_api:
+        console.print("[red]Error:[/red] Google API key not configured.")
+        raise typer.Exit(1)
+
+    # Format capital for display
+    if capital >= 1_000_000_000:
+        capital_str = f"Rp {capital/1_000_000_000:.1f}B"
+    elif capital >= 1_000_000:
+        capital_str = f"Rp {capital/1_000_000:.1f}M"
+    else:
+        capital_str = f"Rp {capital:,}"
+
+    console.print(f"\n[bold]📊 Daily Trading Recommendations[/bold]")
+    console.print(f"[bold cyan]Capital:[/bold cyan] {capital_str}")
+    console.print(f"[bold cyan]Horizon:[/bold cyan] {horizon.upper()}")
+    if holdings:
+        console.print(f"[bold cyan]Holdings:[/bold cyan] {holdings.upper()}")
+    console.print()
+
+    # Build the query for the orchestrator
+    query_parts = [
+        f"I have {capital_str} to invest in Indonesian stocks.",
+        f"Scan {index.upper()} and provide specific portfolio recommendations.",
+    ]
+
+    if horizon == "short":
+        query_parts.append("Focus on SHORT-TERM trades (1-2 weeks) for quick gains.")
+    elif horizon == "long":
+        query_parts.append("Focus on LONG-TERM investments (3-12 months) for steady growth.")
+    else:
+        query_parts.append("Provide BOTH short-term (1-2 weeks) and long-term (3-12 months) recommendations.")
+
+    query_parts.extend([
+        "For each stock recommendation, provide:",
+        "1. Specific number of LOTS to buy (1 lot = 100 shares)",
+        "2. Total investment amount in Rupiah",
+        "3. Entry price zone",
+        "4. Stop-loss level",
+        "5. Target prices",
+        "6. Risk-reward ratio",
+    ])
+
+    if holdings:
+        holdings_list = [h.strip().upper() for h in holdings.split(",")]
+        query_parts.append(f"\nAlso analyze my current holdings: {', '.join(holdings_list)}")
+        query_parts.append("Tell me which to HOLD, which to SELL, and recommended exit points.")
+
+    query_parts.append(f"\nEnsure total recommended investment does not exceed {capital_str}.")
+    query_parts.append("Include a summary table with all positions and allocation percentages.")
+
+    query = "\n".join(query_parts)
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=not verbose,
+        ) as progress:
+            task = progress.add_task("Running multi-agent analysis...", total=None)
+
+            orchestrator = create_trading_orchestrator()
+
+            result = orchestrator.run(query=query)
+
+        if result.get("success"):
+            answer = result.get("answer", "")
+
+            # Display header with recommendation summary
+            recommendation = result.get("recommendation")
+            score = result.get("composite_score", 0)
+
+            if recommendation or score:
+                console.print(
+                    Panel(
+                        f"[bold]Market Outlook:[/bold] {recommendation or 'See analysis below'}\n"
+                        f"[bold]Confidence Score:[/bold] {score:.1f}/10",
+                        title=f"📊 Daily Portfolio ({capital_str})",
+                        border_style="blue",
+                    )
+                )
+
+            # Display the full analysis
+            if answer:
+                console.print()
+                console.print(Markdown(answer))
+
+            # Quick reference table
+            console.print(
+                Panel(
+                    "[bold]Quick Actions:[/bold]\n\n"
+                    f"• [cyan]stockai agents analyze <SYMBOL>[/cyan] - Deep dive on specific stock\n"
+                    f"• [cyan]stockai agents risk <SYMBOL>[/cyan] - Risk assessment\n"
+                    f"• [cyan]stockai portfolio add <SYMBOL> <LOTS> <PRICE>[/cyan] - Record purchase\n\n"
+                    "[dim]Note: 1 lot = 100 shares. Minimum transaction on IDX is 1 lot.[/dim]",
+                    title="📌 Next Steps",
+                    border_style="dim",
+                )
+            )
+        else:
+            console.print(f"[red]Analysis failed:[/red] {result.get('error', 'Unknown error')}")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        if verbose:
+            import traceback
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        raise typer.Exit(1)
+
+
+@agents_app.command("signal")
+def agents_signal(
+    symbol: str = typer.Argument(..., help="Stock symbol"),
+    format: str = typer.Option("table", "--format", "-f", help="Output format: table, markdown, json"),
+) -> None:
+    """Get quick trading signal for a stock.
+
+    Provides entry/exit points without full analysis.
+
+    Examples:
+        stock agents signal BBCA
+        stock agents signal TLKM --format markdown
+    """
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+
+    from stockai.agents import create_trading_orchestrator
+    from stockai.config import get_settings
+
+    symbol = symbol.upper()
+    settings = get_settings()
+
+    if not settings.has_google_api:
+        console.print("[red]Error:[/red] Google API key not configured.")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]⚡ Quick Signal: {symbol}[/bold]\n")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Generating signal...", total=None)
+
+            orchestrator = create_trading_orchestrator()
+
+            result = orchestrator.run(
+                query=f"""Provide a quick trading signal for {symbol}:
+                - Current price and trend
+                - BUY/SELL/HOLD recommendation
+                - Entry zone (price range)
+                - Stop-loss level
+                - Target 1 and Target 2
+                - Risk-reward ratio
+                - Confidence level
+
+                Format as a clear, concise signal card.""",
+                symbol=symbol,
+            )
+
+        if result.get("success"):
+            recommendation = result.get("recommendation", "HOLD")
+            score = result.get("composite_score", 5.0)
+
+            # Color based on recommendation
+            if "BUY" in recommendation:
+                color = "green"
+                icon = "📈"
+            elif "SELL" in recommendation:
+                color = "red"
+                icon = "📉"
+            else:
+                color = "yellow"
+                icon = "➡️"
+
+            if format == "table":
+                console.print(
+                    Panel(
+                        f"[bold {color}]{icon} {recommendation}[/bold {color}]\n\n"
+                        f"[bold]Score:[/bold] {score:.1f}/10\n\n"
+                        f"{result.get('answer', 'See details below')}",
+                        title=f"⚡ {symbol} Signal",
+                        border_style=color,
+                    )
+                )
+            elif format == "markdown":
+                from rich.markdown import Markdown
+                console.print(Markdown(result.get("answer", "")))
+            else:
+                import json
+                output = {
+                    "symbol": symbol,
+                    "recommendation": recommendation,
+                    "score": score,
+                    "analysis": result.get("answer", ""),
+                }
+                console.print(json.dumps(output, indent=2))
+        else:
+            console.print(f"[red]Failed:[/red] {result.get('error', 'Unknown error')}")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
 @agents_app.command("list")
 def agents_list() -> None:
     """List all available trading agents.
@@ -2203,6 +2440,1326 @@ def web(
         reload=reload,
         log_level="info",
     )
+
+
+# Automation subcommand group
+auto_app = typer.Typer(help="Automated trading system")
+app.add_typer(auto_app, name="auto")
+
+
+@auto_app.command("start")
+def auto_start(
+    capital: int = typer.Argument(..., help="Investment capital in Rupiah"),
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index to scan (IDX30, LQ45)"),
+    holdings: str = typer.Option(None, "--holdings", "-h", help="Current holdings (comma-separated)"),
+    telegram_token: str = typer.Option(None, "--telegram-token", envvar="STOCKAI_TELEGRAM_TOKEN", help="Telegram bot token"),
+    telegram_chat: str = typer.Option(None, "--telegram-chat", envvar="STOCKAI_TELEGRAM_CHAT", help="Telegram chat ID"),
+    output_dir: str = typer.Option(None, "--output", "-o", help="Output directory for reports"),
+) -> None:
+    """Start automated trading scheduler.
+
+    Runs continuously with scheduled tasks:
+    - 8:30 AM: Morning scan & daily recommendations
+    - 9:15 AM: Post-market-open check
+    - 12:00 PM: Mid-day review
+    - 3:45 PM: Pre-close signals
+    - 4:15 PM: End of day summary
+
+    Examples:
+        stockai auto start 10000000
+        stockai auto start 50000000 --holdings "BBRI,TLKM,BBCA"
+        stockai auto start 10000000 --telegram-token "BOT_TOKEN" --telegram-chat "CHAT_ID"
+    """
+    import asyncio
+    from stockai.automation.runner import run_automated_trading
+
+    holdings_list = [h.strip().upper() for h in holdings.split(",")] if holdings else []
+
+    console.print(
+        Panel(
+            f"[bold]Starting Automated Trading[/bold]\n\n"
+            f"💰 Capital: Rp {capital:,}\n"
+            f"📊 Index: {index}\n"
+            f"📁 Holdings: {', '.join(holdings_list) if holdings_list else 'None'}\n"
+            f"📱 Telegram: {'Enabled' if telegram_token else 'Disabled'}\n\n"
+            "[dim]Press Ctrl+C to stop[/dim]",
+            title="🤖 StockAI Automation",
+            border_style="green",
+        )
+    )
+
+    try:
+        asyncio.run(
+            run_automated_trading(
+                capital=capital,
+                index=index,
+                holdings=holdings_list,
+                telegram_token=telegram_token,
+                telegram_chat_id=telegram_chat,
+            )
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Automation stopped by user[/yellow]")
+
+
+@auto_app.command("run")
+def auto_run(
+    task: str = typer.Argument(..., help="Task to run: scan, daily, signals, portfolio, summary"),
+    capital: int = typer.Option(10_000_000, "--capital", "-c", help="Investment capital"),
+    holdings: str = typer.Option(None, "--holdings", "-h", help="Current holdings (comma-separated)"),
+    horizon: str = typer.Option("both", "--horizon", help="Investment horizon: short, long, both"),
+    output: str = typer.Option(None, "--output", "-o", help="Save output to file"),
+) -> None:
+    """Run a single automated task.
+
+    Tasks:
+        scan      - Market scan for opportunities
+        daily     - Daily portfolio recommendations
+        signals   - Quick signals for holdings
+        portfolio - Check current portfolio
+        summary   - End of day summary
+
+    Examples:
+        stockai auto run scan
+        stockai auto run daily --capital 5000000 --horizon short
+        stockai auto run signals --holdings "BBRI,TLKM"
+        stockai auto run portfolio --holdings "BBCA,ASII,TLKM"
+    """
+    from pathlib import Path
+    from stockai.automation.runner import AutomatedTrader
+
+    holdings_list = [h.strip().upper() for h in holdings.split(",")] if holdings else []
+
+    trader = AutomatedTrader(
+        capital=capital,
+        holdings=holdings_list,
+        output_dir=output,
+    )
+
+    task_lower = task.lower()
+
+    with console.status(f"[bold blue]Running {task}...[/bold blue]"):
+        if task_lower == "scan":
+            result = trader.run_market_scan()
+        elif task_lower == "daily":
+            result = trader.run_daily_recommendations(horizon=horizon)
+        elif task_lower == "signals":
+            result = trader.run_quick_signals()
+        elif task_lower == "portfolio":
+            result = trader.run_portfolio_check()
+        elif task_lower == "summary":
+            result = trader.run_daily_summary()
+        else:
+            console.print(f"[red]Unknown task:[/red] {task}")
+            console.print("Available: scan, daily, signals, portfolio, summary")
+            raise typer.Exit(1)
+
+    # Display result
+    if result.success:
+        console.print(
+            Panel(
+                result.raw_output[:2000] + "..." if len(result.raw_output) > 2000 else result.raw_output,
+                title=f"✅ {task.title()} Complete",
+                border_style="green",
+            )
+        )
+
+        if result.recommendations:
+            console.print(f"\n[bold]Recommendations:[/bold] {len(result.recommendations)}")
+        if result.signals:
+            console.print(f"[bold]Signals:[/bold] {len(result.signals)}")
+
+        # Show saved file location
+        console.print(f"\n[dim]Report saved to: {trader.output_dir}[/dim]")
+    else:
+        console.print(
+            Panel(
+                "\n".join(result.errors) if result.errors else "Unknown error",
+                title=f"❌ {task.title()} Failed",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(1)
+
+
+@auto_app.command("test-notify")
+def auto_test_notify(
+    telegram_token: str = typer.Option(..., "--telegram-token", "-t", help="Telegram bot token"),
+    telegram_chat: str = typer.Option(..., "--telegram-chat", "-c", help="Telegram chat ID"),
+) -> None:
+    """Test notification setup.
+
+    Examples:
+        stockai auto test-notify --telegram-token "BOT_TOKEN" --telegram-chat "CHAT_ID"
+    """
+    import asyncio
+    from stockai.automation.notifier import TelegramNotifier, TradingAlert
+
+    async def test():
+        notifier = TelegramNotifier(telegram_token, telegram_chat)
+
+        console.print("[bold]Testing Telegram connection...[/bold]")
+
+        if await notifier.test_connection():
+            console.print("[green]✓ Connection successful![/green]")
+
+            alert = TradingAlert(
+                title="Test Alert",
+                message="StockAI automation is configured correctly!",
+                signal="ALERT",
+            )
+
+            if await notifier.send(alert):
+                console.print("[green]✓ Test message sent![/green]")
+            else:
+                console.print("[red]✗ Failed to send test message[/red]")
+        else:
+            console.print("[red]✗ Connection failed[/red]")
+            raise typer.Exit(1)
+
+    asyncio.run(test())
+
+
+@auto_app.command("schedule")
+def auto_schedule() -> None:
+    """Show automation schedule.
+
+    Displays the default trading schedule for IDX market hours.
+    """
+    table = Table(title="📅 StockAI Automation Schedule (Asia/Jakarta)", show_header=True)
+    table.add_column("Time", style="cyan")
+    table.add_column("Task", style="bold")
+    table.add_column("Description")
+
+    schedule = [
+        ("08:30", "Morning Scan", "Daily recommendations and market opportunities"),
+        ("09:15", "Post-Open Check", "Market scan after opening bell"),
+        ("12:00", "Mid-Day Review", "Portfolio status and position checks"),
+        ("15:45", "Pre-Close Signals", "Quick signals for holdings"),
+        ("16:15", "EOD Summary", "End of day summary and outlook"),
+    ]
+
+    for time, task, desc in schedule:
+        table.add_row(time, task, desc)
+
+    console.print(table)
+    console.print("\n[dim]Schedule runs Monday-Friday (IDX trading days)[/dim]")
+    console.print("\n[bold]Quick Start:[/bold]")
+    console.print("  stockai auto start 10000000")
+    console.print("  stockai auto start 10000000 --telegram-token TOKEN --telegram-chat CHAT_ID")
+
+
+# ============================================================================
+# TUTORIAL & LEARNING
+# ============================================================================
+
+learn_app = typer.Typer(help="Learn stock trading step by step")
+app.add_typer(learn_app, name="learn")
+
+
+@learn_app.command("start")
+def learn_start() -> None:
+    """Start the beginner tutorial.
+
+    Interactive lessons covering:
+    - Stock market basics
+    - How to analyze stocks
+    - Risk management
+    - Using StockAI effectively
+
+    Examples:
+        stockai learn start
+    """
+    from stockai.tutorial.lessons import get_all_lessons, LessonProgress, LessonCategory
+    from pathlib import Path
+
+    lessons = get_all_lessons()
+    progress_path = Path.home() / ".stockai" / "learning_progress.json"
+    progress = LessonProgress.load(progress_path) if progress_path.exists() else LessonProgress()
+
+    # Welcome message
+    console.print(
+        Panel(
+            "[bold]Selamat Datang di StockAI Learning![/bold]\n\n"
+            "Tutorial interaktif untuk belajar investasi saham Indonesia.\n\n"
+            f"📚 Total Pelajaran: {len(lessons)}\n"
+            f"✅ Selesai: {len(progress.completed_lessons)}\n"
+            f"📈 Progress: {progress.get_progress_percent(len(lessons)):.0f}%\n\n"
+            "[dim]Ketik 'stockai learn list' untuk melihat daftar pelajaran[/dim]",
+            title="📖 StockAI Learning",
+            border_style="blue",
+        )
+    )
+
+    # Show categories
+    console.print("\n[bold]Kategori Pelajaran:[/bold]\n")
+
+    categories = {
+        LessonCategory.BASICS: ("📘 Dasar-Dasar", "Apa itu saham, cara untung, lot & biaya"),
+        LessonCategory.ANALYSIS: ("📊 Analisis", "Fundamental & teknikal analysis"),
+        LessonCategory.RISK: ("⚠️ Manajemen Risiko", "Stop-loss, position sizing, diversifikasi"),
+        LessonCategory.STOCKAI: ("🤖 Menggunakan StockAI", "Command dan workflow"),
+    }
+
+    for cat, (icon, desc) in categories.items():
+        cat_lessons = [l for l in lessons if l.category == cat]
+        completed = len([l for l in cat_lessons if l.id in progress.completed_lessons])
+        console.print(f"  {icon}: {desc} ({completed}/{len(cat_lessons)})")
+
+    console.print("\n[bold]Mulai Belajar:[/bold]")
+    console.print("  stockai learn lesson basics_01_what_is_stock")
+    console.print("  stockai learn list")
+
+
+@learn_app.command("list")
+def learn_list() -> None:
+    """List all available lessons."""
+    from stockai.tutorial.lessons import get_all_lessons, LessonProgress
+    from pathlib import Path
+
+    lessons = get_all_lessons()
+    progress_path = Path.home() / ".stockai" / "learning_progress.json"
+    progress = LessonProgress.load(progress_path) if progress_path.exists() else LessonProgress()
+
+    table = Table(title="📚 Daftar Pelajaran", show_header=True)
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Status", width=3)
+    table.add_column("ID", style="cyan")
+    table.add_column("Judul")
+    table.add_column("Durasi", justify="right", style="dim")
+
+    for i, lesson in enumerate(lessons, 1):
+        status = "✅" if lesson.id in progress.completed_lessons else "⬜"
+        table.add_row(
+            str(i),
+            status,
+            lesson.id,
+            lesson.title,
+            f"{lesson.duration_minutes} menit",
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]Progress: {len(progress.completed_lessons)}/{len(lessons)} selesai[/dim]")
+    console.print("\n[bold]Buka pelajaran:[/bold] stockai learn lesson <ID>")
+
+
+@learn_app.command("lesson")
+def learn_lesson(
+    lesson_id: str = typer.Argument(..., help="Lesson ID to view"),
+    mark_complete: bool = typer.Option(False, "--complete", "-c", help="Mark lesson as complete"),
+) -> None:
+    """View a specific lesson.
+
+    Examples:
+        stockai learn lesson basics_01_what_is_stock
+        stockai learn lesson basics_02_how_to_profit --complete
+    """
+    from stockai.tutorial.lessons import get_lesson, get_next_lesson, LessonProgress
+    from rich.markdown import Markdown
+    from pathlib import Path
+
+    lesson = get_lesson(lesson_id)
+    if not lesson:
+        console.print(f"[red]Pelajaran tidak ditemukan:[/red] {lesson_id}")
+        console.print("Gunakan 'stockai learn list' untuk melihat daftar pelajaran.")
+        raise typer.Exit(1)
+
+    # Display lesson
+    console.print(
+        Panel(
+            f"[bold]{lesson.title}[/bold]\n"
+            f"[dim]Kategori: {lesson.category.value} | Durasi: {lesson.duration_minutes} menit[/dim]",
+            border_style="blue",
+        )
+    )
+
+    # Content
+    console.print(Markdown(lesson.content))
+
+    # Key points
+    if lesson.key_points:
+        console.print("\n[bold yellow]📌 Poin Penting:[/bold yellow]")
+        for point in lesson.key_points:
+            console.print(f"  • {point}")
+
+    # Practice command
+    if lesson.practice_command:
+        console.print(f"\n[bold green]💻 Latihan:[/bold green]")
+        console.print(f"  {lesson.practice_command}")
+
+    # Quiz
+    if lesson.quiz_questions:
+        console.print(f"\n[bold cyan]📝 Quiz tersedia![/bold cyan] Jalankan: stockai learn quiz {lesson_id}")
+
+    # Mark complete
+    progress_path = Path.home() / ".stockai" / "learning_progress.json"
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    progress = LessonProgress.load(progress_path) if progress_path.exists() else LessonProgress()
+
+    if mark_complete:
+        progress.complete_lesson(lesson_id)
+        progress.save(progress_path)
+        console.print("\n[green]✅ Pelajaran ditandai selesai![/green]")
+
+    # Next lesson
+    next_lesson = get_next_lesson(lesson_id)
+    if next_lesson:
+        console.print(f"\n[dim]Pelajaran berikutnya: stockai learn lesson {next_lesson.id}[/dim]")
+
+
+@learn_app.command("quiz")
+def learn_quiz(
+    lesson_id: str = typer.Argument(..., help="Lesson ID to take quiz for"),
+) -> None:
+    """Take a quiz for a lesson.
+
+    Examples:
+        stockai learn quiz basics_01_what_is_stock
+    """
+    from stockai.tutorial.lessons import get_lesson, LessonProgress
+    from stockai.tutorial.quiz import Question, Quiz
+    from pathlib import Path
+
+    lesson = get_lesson(lesson_id)
+    if not lesson:
+        console.print(f"[red]Pelajaran tidak ditemukan:[/red] {lesson_id}")
+        raise typer.Exit(1)
+
+    if not lesson.quiz_questions:
+        console.print(f"[yellow]Pelajaran ini tidak memiliki quiz.[/yellow]")
+        raise typer.Exit(0)
+
+    # Create quiz
+    questions = [
+        Question(
+            text=q["question"],
+            options=q["options"],
+            correct_index=q["correct"],
+        )
+        for q in lesson.quiz_questions
+    ]
+    quiz = Quiz(lesson_id=lesson_id, questions=questions)
+
+    console.print(
+        Panel(
+            f"[bold]Quiz: {lesson.title}[/bold]\n"
+            f"[dim]{len(questions)} pertanyaan[/dim]",
+            border_style="cyan",
+        )
+    )
+
+    # Interactive quiz
+    correct = 0
+    for i, question in enumerate(questions, 1):
+        console.print(f"\n[bold]Pertanyaan {i}/{len(questions)}:[/bold]")
+        console.print(f"  {question.text}\n")
+
+        for j, option in enumerate(question.options):
+            console.print(f"    {j + 1}. {option}")
+
+        while True:
+            try:
+                answer = typer.prompt("\nJawaban Anda (1-4)")
+                answer_idx = int(answer) - 1
+                if 0 <= answer_idx < len(question.options):
+                    break
+                console.print("[red]Pilih 1-4[/red]")
+            except ValueError:
+                console.print("[red]Masukkan angka 1-4[/red]")
+
+        if question.check_answer(answer_idx):
+            console.print("[green]✅ Benar![/green]")
+            correct += 1
+        else:
+            console.print(f"[red]❌ Salah. Jawaban benar: {question.correct_answer}[/red]")
+
+    # Results
+    score = (correct / len(questions)) * 100
+    passed = score >= 70
+
+    console.print(
+        Panel(
+            f"[bold]Hasil Quiz[/bold]\n\n"
+            f"Benar: {correct}/{len(questions)}\n"
+            f"Score: {score:.0f}%\n"
+            f"Status: {'[green]LULUS ✅[/green]' if passed else '[red]BELUM LULUS ❌[/red]'}",
+            border_style="green" if passed else "red",
+        )
+    )
+
+    # Save progress if passed
+    if passed:
+        progress_path = Path.home() / ".stockai" / "learning_progress.json"
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        progress = LessonProgress.load(progress_path) if progress_path.exists() else LessonProgress()
+        progress.complete_lesson(lesson_id)
+        progress.set_quiz_score(lesson_id, score)
+        progress.save(progress_path)
+        console.print("[green]Pelajaran ditandai selesai![/green]")
+
+
+# ============================================================================
+# PAPER TRADING
+# ============================================================================
+
+paper_app = typer.Typer(help="Paper trading (simulated) for practice")
+app.add_typer(paper_app, name="paper")
+
+
+@paper_app.command("start")
+def paper_start(
+    capital: int = typer.Argument(10_000_000, help="Starting capital in Rupiah"),
+) -> None:
+    """Start a new paper trading account.
+
+    Creates a simulated trading account to practice without real money.
+
+    Examples:
+        stockai paper start              # Default Rp 10 million
+        stockai paper start 5000000      # Start with Rp 5 million
+    """
+    from stockai.tutorial.paper_trading import create_paper_account, get_default_paper_path
+
+    path = get_default_paper_path()
+
+    if path.exists():
+        if not typer.confirm("Paper account sudah ada. Reset dengan modal baru?"):
+            console.print("[yellow]Dibatalkan.[/yellow]")
+            raise typer.Exit(0)
+
+    account = create_paper_account(capital=capital, save_path=path)
+
+    console.print(
+        Panel(
+            f"[bold green]Paper Trading Account Created![/bold green]\n\n"
+            f"💰 Modal Awal: Rp {capital:,}\n"
+            f"📁 Saved to: {path}\n\n"
+            "[dim]Mulai trading dengan:[/dim]\n"
+            "  stockai paper buy BBRI 2\n"
+            "  stockai paper portfolio",
+            title="📝 Paper Trading",
+            border_style="green",
+        )
+    )
+
+
+@paper_app.command("buy")
+def paper_buy(
+    symbol: str = typer.Argument(..., help="Stock symbol"),
+    lots: int = typer.Argument(..., help="Number of lots to buy"),
+    price: float = typer.Option(None, "--price", "-p", help="Buy price (auto-fetch if not specified)"),
+    stop_loss: float = typer.Option(None, "--stoploss", "-sl", help="Stop-loss price"),
+    target: float = typer.Option(None, "--target", "-t", help="Target price"),
+    notes: str = typer.Option("", "--notes", "-n", help="Trade notes"),
+) -> None:
+    """Execute a paper buy order.
+
+    Examples:
+        stockai paper buy BBRI 2
+        stockai paper buy BBCA 1 --price 9500 --stoploss 8800 --target 10500
+    """
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    path = get_default_paper_path()
+    if not path.exists():
+        console.print("[red]Paper account belum dibuat. Jalankan:[/red] stockai paper start")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+    symbol = symbol.upper()
+
+    # Auto-fetch price if not specified
+    if price is None:
+        with console.status(f"Fetching {symbol} price..."):
+            yahoo = YahooFinanceSource()
+            ticker = f"{symbol}.JK"
+            info = yahoo.get_stock_info(ticker)
+            price = info.get("regularMarketPrice") or info.get("previousClose")
+            if not price:
+                console.print(f"[red]Cannot fetch price for {symbol}. Specify with --price[/red]")
+                raise typer.Exit(1)
+
+    result = account.buy(symbol, lots, price, stop_loss, target, notes)
+
+    if isinstance(result, str):
+        console.print(f"[red]Error:[/red] {result}")
+        raise typer.Exit(1)
+
+    account.save(path)
+
+    total = lots * 100 * price
+    console.print(
+        Panel(
+            f"[bold green]BUY Order Executed[/bold green]\n\n"
+            f"📈 {symbol}: {lots} lot @ Rp {price:,.0f}\n"
+            f"💵 Total: Rp {total:,.0f} + fee Rp {result.fee:,.0f}\n"
+            f"💰 Cash remaining: Rp {account.cash:,.0f}"
+            + (f"\n🛑 Stop-loss: Rp {stop_loss:,.0f}" if stop_loss else "")
+            + (f"\n🎯 Target: Rp {target:,.0f}" if target else ""),
+            title="✅ Paper Trade",
+            border_style="green",
+        )
+    )
+
+
+@paper_app.command("sell")
+def paper_sell(
+    symbol: str = typer.Argument(..., help="Stock symbol"),
+    lots: int = typer.Argument(..., help="Number of lots to sell"),
+    price: float = typer.Option(None, "--price", "-p", help="Sell price (auto-fetch if not specified)"),
+    notes: str = typer.Option("", "--notes", "-n", help="Trade notes"),
+) -> None:
+    """Execute a paper sell order.
+
+    Examples:
+        stockai paper sell BBRI 1
+        stockai paper sell BBCA 2 --price 10000
+    """
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    path = get_default_paper_path()
+    if not path.exists():
+        console.print("[red]Paper account belum dibuat. Jalankan:[/red] stockai paper start")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+    symbol = symbol.upper()
+
+    # Auto-fetch price
+    if price is None:
+        with console.status(f"Fetching {symbol} price..."):
+            yahoo = YahooFinanceSource()
+            ticker = f"{symbol}.JK"
+            info = yahoo.get_stock_info(ticker)
+            price = info.get("regularMarketPrice") or info.get("previousClose")
+            if not price:
+                console.print(f"[red]Cannot fetch price for {symbol}. Specify with --price[/red]")
+                raise typer.Exit(1)
+
+    # Calculate P&L before selling
+    if symbol in account.positions:
+        pos = account.positions[symbol]
+        pnl_per_share = price - pos.avg_price
+        pnl_total = pnl_per_share * lots * 100
+        pnl_pct = (pnl_per_share / pos.avg_price) * 100
+    else:
+        pnl_total = 0
+        pnl_pct = 0
+
+    result = account.sell(symbol, lots, price, notes)
+
+    if isinstance(result, str):
+        console.print(f"[red]Error:[/red] {result}")
+        raise typer.Exit(1)
+
+    account.save(path)
+
+    pnl_color = "green" if pnl_total >= 0 else "red"
+    console.print(
+        Panel(
+            f"[bold red]SELL Order Executed[/bold red]\n\n"
+            f"📉 {symbol}: {lots} lot @ Rp {price:,.0f}\n"
+            f"💵 Proceeds: Rp {result.total_value:,.0f} (after fee Rp {result.fee:,.0f})\n"
+            f"[{pnl_color}]P&L: Rp {pnl_total:,.0f} ({pnl_pct:+.1f}%)[/{pnl_color}]\n"
+            f"💰 Cash: Rp {account.cash:,.0f}",
+            title="✅ Paper Trade",
+            border_style="red",
+        )
+    )
+
+
+@paper_app.command("portfolio")
+def paper_portfolio() -> None:
+    """View paper trading portfolio.
+
+    Shows current positions, P&L, and account summary.
+
+    Examples:
+        stockai paper portfolio
+    """
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    path = get_default_paper_path()
+    if not path.exists():
+        console.print("[red]Paper account belum dibuat. Jalankan:[/red] stockai paper start")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+
+    # Update prices
+    if account.positions:
+        with console.status("Updating prices..."):
+            yahoo = YahooFinanceSource()
+            prices = {}
+            for symbol in account.positions.keys():
+                try:
+                    info = yahoo.get_stock_info(f"{symbol}.JK")
+                    prices[symbol] = info.get("regularMarketPrice") or info.get("previousClose", 0)
+                except Exception:
+                    pass
+            account.update_prices(prices)
+
+    # Summary
+    summary = account.get_summary()
+    pnl_color = "green" if summary["total_pnl"] >= 0 else "red"
+
+    console.print(
+        Panel(
+            f"[bold]Paper Trading Portfolio[/bold]\n\n"
+            f"💰 Modal Awal: Rp {summary['initial_capital']:,.0f}\n"
+            f"💵 Cash: Rp {summary['cash']:,.0f}\n"
+            f"📊 Nilai Portfolio: Rp {summary['portfolio_value']:,.0f}\n"
+            f"[{pnl_color}]📈 Total P&L: Rp {summary['total_pnl']:,.0f} ({summary['total_pnl_pct']:+.1f}%)[/{pnl_color}]\n"
+            f"🎯 Win Rate: {summary['win_rate']:.0f}%\n"
+            f"📝 Total Trades: {summary['trades_count']}",
+            title="📊 Portfolio Summary",
+            border_style="blue",
+        )
+    )
+
+    # Positions table
+    if account.positions:
+        table = Table(title="📈 Open Positions", show_header=True)
+        table.add_column("Symbol", style="cyan")
+        table.add_column("Lots", justify="right")
+        table.add_column("Avg Price", justify="right")
+        table.add_column("Current", justify="right")
+        table.add_column("Value", justify="right")
+        table.add_column("P&L", justify="right")
+        table.add_column("P&L %", justify="right")
+
+        for symbol, pos in account.positions.items():
+            pnl_style = "green" if pos.unrealized_pnl >= 0 else "red"
+            table.add_row(
+                symbol,
+                str(pos.lots),
+                f"Rp {pos.avg_price:,.0f}",
+                f"Rp {pos.current_price:,.0f}",
+                f"Rp {pos.current_value:,.0f}",
+                f"[{pnl_style}]Rp {pos.unrealized_pnl:,.0f}[/{pnl_style}]",
+                f"[{pnl_style}]{pos.unrealized_pnl_pct:+.1f}%[/{pnl_style}]",
+            )
+
+        console.print(table)
+
+        # Check alerts
+        warnings = account.check_stop_losses(prices)
+        targets = account.check_targets(prices)
+        for msg in warnings + targets:
+            console.print(msg)
+    else:
+        console.print("\n[dim]Belum ada posisi. Mulai dengan: stockai paper buy BBRI 2[/dim]")
+
+
+@paper_app.command("history")
+def paper_history(
+    limit: int = typer.Option(10, "--limit", "-l", help="Number of trades to show"),
+) -> None:
+    """View paper trading history.
+
+    Examples:
+        stockai paper history
+        stockai paper history --limit 20
+    """
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+
+    path = get_default_paper_path()
+    if not path.exists():
+        console.print("[red]Paper account belum dibuat.[/red]")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+
+    if not account.trades:
+        console.print("[dim]Belum ada trade history.[/dim]")
+        return
+
+    table = Table(title="📜 Trade History", show_header=True)
+    table.add_column("Date", style="dim")
+    table.add_column("Action")
+    table.add_column("Symbol", style="cyan")
+    table.add_column("Lots", justify="right")
+    table.add_column("Price", justify="right")
+    table.add_column("Value", justify="right")
+    table.add_column("Fee", justify="right", style="dim")
+
+    for trade in reversed(account.trades[-limit:]):
+        action_style = "green" if trade.action.value == "BUY" else "red"
+        table.add_row(
+            trade.timestamp.strftime("%Y-%m-%d %H:%M"),
+            f"[{action_style}]{trade.action.value}[/{action_style}]",
+            trade.symbol,
+            str(trade.lots),
+            f"Rp {trade.price:,.0f}",
+            f"Rp {trade.total_value:,.0f}",
+            f"Rp {trade.fee:,.0f}",
+        )
+
+    console.print(table)
+
+
+@paper_app.command("reset")
+def paper_reset(
+    capital: int = typer.Option(10_000_000, "--capital", "-c", help="New starting capital"),
+) -> None:
+    """Reset paper trading account.
+
+    Clears all positions and history, starts fresh.
+
+    Examples:
+        stockai paper reset
+        stockai paper reset --capital 5000000
+    """
+    from stockai.tutorial.paper_trading import create_paper_account, get_default_paper_path
+
+    if not typer.confirm("Reset semua posisi dan history?"):
+        console.print("[yellow]Dibatalkan.[/yellow]")
+        raise typer.Exit(0)
+
+    path = get_default_paper_path()
+    account = create_paper_account(capital=capital, save_path=path)
+
+    console.print(f"[green]Paper account reset dengan modal Rp {capital:,}[/green]")
+
+
+# =============================================================================
+# SCORING COMMANDS - Multi-factor stock scoring
+# =============================================================================
+
+score_app = typer.Typer(help="Multi-factor stock scoring system")
+app.add_typer(score_app, name="score")
+
+
+@score_app.command("stock")
+def score_stock(
+    symbol: str = typer.Argument(..., help="Stock symbol (e.g., BBCA)"),
+) -> None:
+    """Calculate multi-factor score for a stock.
+
+    Uses hedge fund-style scoring: Value (25%), Quality (30%),
+    Momentum (25%), Volatility (20%).
+
+    Examples:
+        stockai score stock BBCA
+        stockai score stock TLKM
+    """
+    from stockai.scoring.factors import score_stock, get_score_interpretation
+    from stockai.scoring.signals import SignalGenerator, format_signal_for_display
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    symbol = symbol.upper()
+    console.print(f"\n[bold]Calculating score for {symbol}...[/bold]\n")
+
+    source = YahooFinanceSource()
+
+    # Get stock info
+    info = source.get_stock_info(symbol)
+    if not info:
+        console.print(f"[red]Error: Could not fetch data for {symbol}[/red]")
+        raise typer.Exit(1)
+
+    # Get price history for technical metrics
+    df = source.get_price_history(symbol, period="6mo")
+
+    # Build fundamentals dict
+    fundamentals = {
+        "pe_ratio": info.get("forwardPE") or info.get("trailingPE"),
+        "pb_ratio": info.get("priceToBook"),
+        "roe": info.get("returnOnEquity", 0) * 100 if info.get("returnOnEquity") else None,
+        "debt_to_equity": info.get("debtToEquity", 0) / 100 if info.get("debtToEquity") else None,
+        "profit_margin": info.get("profitMargins", 0) * 100 if info.get("profitMargins") else None,
+        "market_cap": info.get("marketCap"),
+    }
+
+    # Build price data dict
+    price_data = {}
+    if not df.empty:
+        returns = (df["close"].iloc[-1] / df["close"].iloc[0] - 1) * 100
+        price_data["returns_6m"] = returns
+        if len(df) >= 60:
+            price_data["returns_3m"] = (df["close"].iloc[-1] / df["close"].iloc[-60] - 1) * 100
+        if len(df) >= 20:
+            price_data["returns_1m"] = (df["close"].iloc[-1] / df["close"].iloc[-20] - 1) * 100
+            price_data["std_dev"] = df["close"].pct_change().std() * (252 ** 0.5) * 100
+
+        # Calculate beta (simplified)
+        price_data["beta"] = info.get("beta", 1.0)
+
+    # Calculate scores
+    scores = score_stock(symbol, fundamentals, price_data)
+
+    # Display results
+    console.print(Panel(
+        f"[bold cyan]{symbol}[/bold cyan] Multi-Factor Score\n\n"
+        f"[bold]Composite Score: {scores.composite_score:.0f}/100[/bold]\n\n"
+        f"  📊 Value (25%):      {scores.value_score:5.0f}/100\n"
+        f"  ⭐ Quality (30%):    {scores.quality_score:5.0f}/100\n"
+        f"  📈 Momentum (25%):   {scores.momentum_score:5.0f}/100\n"
+        f"  🛡️ Volatility (20%): {scores.volatility_score:5.0f}/100\n\n"
+        f"[dim]Interpretation: {get_score_interpretation(scores.composite_score)}[/dim]",
+        title="📊 Factor Scores",
+        border_style="blue",
+    ))
+
+    # Show metrics
+    table = Table(title="📋 Underlying Metrics", show_header=True)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", justify="right")
+
+    if scores.pe_ratio:
+        table.add_row("P/E Ratio", f"{scores.pe_ratio:.1f}")
+    if scores.pb_ratio:
+        table.add_row("P/B Ratio", f"{scores.pb_ratio:.2f}")
+    if scores.roe:
+        table.add_row("ROE", f"{scores.roe:.1f}%")
+    if scores.debt_to_equity:
+        table.add_row("Debt/Equity", f"{scores.debt_to_equity:.2f}")
+    if scores.profit_margin:
+        table.add_row("Profit Margin", f"{scores.profit_margin:.1f}%")
+    if scores.momentum_6m:
+        table.add_row("6M Return", f"{scores.momentum_6m:.1f}%")
+    if scores.beta:
+        table.add_row("Beta", f"{scores.beta:.2f}")
+    if scores.std_dev:
+        table.add_row("Volatility", f"{scores.std_dev:.1f}%")
+
+    console.print(table)
+
+    # Generate signal
+    current_price = info.get("regularMarketPrice") or info.get("previousClose", 0)
+    if current_price > 0:
+        signal_gen = SignalGenerator()
+        signal = signal_gen.generate_signal(
+            symbol=symbol,
+            current_score=scores.composite_score,
+            current_price=current_price,
+            momentum_score=scores.momentum_score,
+        )
+
+        console.print()
+        console.print(format_signal_for_display(signal))
+
+
+@score_app.command("rank")
+def score_rank(
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index to rank (IDX30, LQ45)"),
+    top: int = typer.Option(10, "--top", "-t", help="Number of top stocks to show"),
+) -> None:
+    """Rank stocks by composite score.
+
+    Shows top N stocks in an index ranked by multi-factor score.
+
+    Examples:
+        stockai score rank
+        stockai score rank --index LQ45 --top 15
+    """
+    from stockai.scoring.factors import score_stock
+    from stockai.data.sources.yahoo import YahooFinanceSource
+    from stockai.data.sources.idx import IDXIndexSource
+
+    console.print(f"\n[bold]Ranking {index} stocks by composite score...[/bold]\n")
+    console.print("[dim]This may take a minute to fetch all data...[/dim]\n")
+
+    # Get stock list
+    idx_source = IDXIndexSource()
+    if index.upper() == "IDX30":
+        stocks = idx_source.get_idx30_stocks()
+    else:
+        stocks = idx_source.get_lq45_stocks()
+
+    source = YahooFinanceSource()
+    rankings = []
+
+    with console.status("[bold green]Fetching stock data..."):
+        for stock in stocks:
+            symbol = stock["symbol"]
+            try:
+                info = source.get_stock_info(symbol)
+                if not info:
+                    continue
+
+                df = source.get_price_history(symbol, period="6mo")
+
+                fundamentals = {
+                    "pe_ratio": info.get("forwardPE") or info.get("trailingPE"),
+                    "pb_ratio": info.get("priceToBook"),
+                    "roe": info.get("returnOnEquity", 0) * 100 if info.get("returnOnEquity") else None,
+                    "debt_to_equity": info.get("debtToEquity", 0) / 100 if info.get("debtToEquity") else None,
+                    "profit_margin": info.get("profitMargins", 0) * 100 if info.get("profitMargins") else None,
+                }
+
+                price_data = {}
+                if not df.empty:
+                    returns = (df["close"].iloc[-1] / df["close"].iloc[0] - 1) * 100
+                    price_data["returns_6m"] = returns
+                    price_data["beta"] = info.get("beta", 1.0)
+                    if len(df) >= 20:
+                        price_data["std_dev"] = df["close"].pct_change().std() * (252 ** 0.5) * 100
+
+                scores = score_stock(symbol, fundamentals, price_data)
+                rankings.append({
+                    "symbol": symbol,
+                    "score": scores.composite_score,
+                    "value": scores.value_score,
+                    "quality": scores.quality_score,
+                    "momentum": scores.momentum_score,
+                    "volatility": scores.volatility_score,
+                    "price": info.get("regularMarketPrice", 0),
+                })
+            except Exception as e:
+                console.print(f"[dim]Skipped {symbol}: {e}[/dim]")
+
+    # Sort by score
+    rankings.sort(key=lambda x: x["score"], reverse=True)
+
+    # Display table
+    table = Table(title=f"🏆 Top {top} Stocks by Score ({index})", show_header=True)
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Symbol", style="cyan")
+    table.add_column("Score", justify="right", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_column("Quality", justify="right")
+    table.add_column("Mom.", justify="right")
+    table.add_column("Vol.", justify="right")
+    table.add_column("Price", justify="right")
+
+    for i, stock in enumerate(rankings[:top], 1):
+        score_style = "green" if stock["score"] >= 70 else "yellow" if stock["score"] >= 50 else "red"
+        table.add_row(
+            str(i),
+            stock["symbol"],
+            f"[{score_style}]{stock['score']:.0f}[/{score_style}]",
+            f"{stock['value']:.0f}",
+            f"{stock['quality']:.0f}",
+            f"{stock['momentum']:.0f}",
+            f"{stock['volatility']:.0f}",
+            f"Rp {stock['price']:,.0f}" if stock['price'] else "-",
+        )
+
+    console.print(table)
+
+
+# =============================================================================
+# RISK COMMANDS - Position sizing and risk management
+# =============================================================================
+
+risk_app = typer.Typer(help="Risk management tools")
+app.add_typer(risk_app, name="risk")
+
+
+@risk_app.command("position")
+def risk_position_size(
+    symbol: str = typer.Argument(..., help="Stock symbol"),
+    capital: int = typer.Option(5_000_000, "--capital", "-c", help="Total capital in Rupiah"),
+    stop_loss_pct: float = typer.Option(8.0, "--stop", "-s", help="Stop-loss percentage below entry"),
+    target_pct: float = typer.Option(15.0, "--target", "-t", help="Target percentage above entry"),
+) -> None:
+    """Calculate optimal position size using 2% risk rule.
+
+    Determines how many lots to buy based on your capital and risk tolerance.
+
+    Examples:
+        stockai risk position BBCA
+        stockai risk position BBRI --capital 10000000 --stop 10
+    """
+    from stockai.risk.position_sizing import calculate_position_size, format_position_size_for_display
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    symbol = symbol.upper()
+    console.print(f"\n[bold]Calculating position size for {symbol}...[/bold]\n")
+
+    source = YahooFinanceSource()
+    info = source.get_stock_info(symbol)
+
+    if not info:
+        console.print(f"[red]Error: Could not fetch data for {symbol}[/red]")
+        raise typer.Exit(1)
+
+    current_price = info.get("regularMarketPrice") or info.get("previousClose", 0)
+    if current_price <= 0:
+        console.print(f"[red]Error: No price data for {symbol}[/red]")
+        raise typer.Exit(1)
+
+    stop_loss_price = current_price * (1 - stop_loss_pct / 100)
+    target_price = current_price * (1 + target_pct / 100)
+
+    pos = calculate_position_size(
+        capital=capital,
+        entry_price=current_price,
+        stop_loss_price=stop_loss_price,
+        target_price=target_price,
+        symbol=symbol,
+    )
+
+    console.print(format_position_size_for_display(pos, capital))
+
+
+@risk_app.command("diversification")
+def risk_diversification() -> None:
+    """Check portfolio diversification against limits.
+
+    Ensures you're not too concentrated in any stock or sector.
+
+    Examples:
+        stockai risk diversification
+    """
+    from stockai.risk.diversification import check_diversification, format_diversification_for_display, DiversificationLimits
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data import get_stock_sector
+
+    path = get_default_paper_path()
+    if not path.exists():
+        console.print("[red]Paper account not found. Use 'stockai paper start' first.[/red]")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+
+    if not account.positions:
+        console.print("[yellow]No positions to check.[/yellow]")
+        return
+
+    # Build positions list with sector info
+    positions = []
+    for symbol, pos in account.positions.items():
+        sector = get_stock_sector(symbol) or "Unknown"
+        positions.append({
+            "symbol": symbol,
+            "value": pos.current_value or pos.total_cost,
+            "sector": sector,
+        })
+
+    check = check_diversification(positions)
+    console.print(format_diversification_for_display(check))
+
+
+@risk_app.command("portfolio")
+def risk_portfolio() -> None:
+    """Analyze portfolio-level risk metrics.
+
+    Shows volatility, VaR, drawdown, and other risk measures.
+
+    Examples:
+        stockai risk portfolio
+    """
+    from stockai.risk.portfolio_risk import calculate_portfolio_risk, format_portfolio_risk_for_display
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+
+    path = get_default_paper_path()
+    if not path.exists():
+        console.print("[red]Paper account not found. Use 'stockai paper start' first.[/red]")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+
+    positions = []
+    for symbol, pos in account.positions.items():
+        positions.append({
+            "symbol": symbol,
+            "value": pos.current_value or pos.total_cost,
+            "weight": 0,  # Will be calculated
+        })
+
+    risk = calculate_portfolio_risk(positions)
+    console.print(format_portfolio_risk_for_display(risk))
+
+
+# =============================================================================
+# BRIEFING COMMANDS - Daily and weekly briefings
+# =============================================================================
+
+@app.command("morning")
+def briefing_morning() -> None:
+    """Get morning briefing before market open.
+
+    Shows critical alerts, portfolio snapshot, and today's focus.
+    Designed to be read in 5 minutes.
+
+    Examples:
+        stockai morning
+    """
+    from stockai.briefing.daily import generate_morning_briefing, format_morning_briefing
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    path = get_default_paper_path()
+    portfolio = None
+
+    if path.exists():
+        account = PaperTradingAccount.load(path)
+
+        # Update prices
+        source = YahooFinanceSource()
+        prices = {}
+        for symbol in account.positions:
+            try:
+                info = source.get_stock_info(symbol)
+                if info:
+                    prices[symbol] = info.get("regularMarketPrice") or info.get("previousClose", 0)
+            except Exception:
+                pass
+        account.update_prices(prices)
+
+        portfolio = {
+            "positions": {s: {
+                "symbol": s,
+                "current_price": p.current_price,
+                "avg_price": p.avg_price,
+                "shares": p.shares,
+                "current_value": p.current_value,
+                "stop_loss": p.stop_loss,
+                "target": p.target,
+            } for s, p in account.positions.items()},
+            "cash": account.cash,
+            "initial_capital": account.initial_capital,
+        }
+
+    briefing = generate_morning_briefing(portfolio=portfolio)
+    console.print(format_morning_briefing(briefing))
+
+
+@app.command("evening")
+def briefing_evening() -> None:
+    """Get evening briefing after market close.
+
+    Shows today's performance, trades, and tomorrow's focus.
+    Designed to be read in 5 minutes.
+
+    Examples:
+        stockai evening
+    """
+    from stockai.briefing.daily import generate_evening_briefing, format_evening_briefing
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    path = get_default_paper_path()
+    portfolio = None
+    trades_today = []
+
+    if path.exists():
+        account = PaperTradingAccount.load(path)
+
+        # Update prices
+        source = YahooFinanceSource()
+        prices = {}
+        for symbol in account.positions:
+            try:
+                info = source.get_stock_info(symbol)
+                if info:
+                    prices[symbol] = info.get("regularMarketPrice") or info.get("previousClose", 0)
+            except Exception:
+                pass
+        account.update_prices(prices)
+
+        portfolio = {
+            "positions": {s: {
+                "symbol": s,
+                "current_price": p.current_price,
+                "avg_price": p.avg_price,
+                "shares": p.shares,
+                "current_value": p.current_value,
+            } for s, p in account.positions.items()},
+            "cash": account.cash,
+            "initial_capital": account.initial_capital,
+        }
+
+        # Get today's trades
+        from datetime import datetime
+        today = datetime.now().date()
+        trades_today = [
+            {
+                "action": t.action.value,
+                "symbol": t.symbol,
+                "lots": t.lots,
+                "price": t.price,
+            }
+            for t in account.trades
+            if t.timestamp.date() == today
+        ]
+
+    briefing = generate_evening_briefing(portfolio=portfolio, trades_today=trades_today)
+    console.print(format_evening_briefing(briefing))
+
+
+@app.command("weekly")
+def briefing_weekly() -> None:
+    """Get weekly performance review.
+
+    Shows week's performance, trade analysis, and lessons learned.
+    Designed for 30-minute weekend review.
+
+    Examples:
+        stockai weekly
+    """
+    from stockai.briefing.weekly import generate_weekly_review, format_weekly_review
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data.sources.yahoo import YahooFinanceSource
+    from datetime import datetime, timedelta
+
+    path = get_default_paper_path()
+
+    if not path.exists():
+        console.print("[red]Paper account not found. Use 'stockai paper start' first.[/red]")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+
+    # Update prices
+    source = YahooFinanceSource()
+    prices = {}
+    for symbol in account.positions:
+        try:
+            info = source.get_stock_info(symbol)
+            if info:
+                prices[symbol] = info.get("regularMarketPrice") or info.get("previousClose", 0)
+        except Exception:
+            pass
+    account.update_prices(prices)
+
+    portfolio = {
+        "positions": {s: {
+            "symbol": s,
+            "current_price": p.current_price,
+            "avg_price": p.avg_price,
+            "shares": p.shares,
+            "current_value": p.current_value,
+        } for s, p in account.positions.items()},
+        "cash": account.cash,
+        "initial_capital": account.initial_capital,
+    }
+
+    # Get this week's trades
+    now = datetime.now()
+    week_start = now - timedelta(days=now.weekday())
+    trades_this_week = [
+        {
+            "action": t.action.value,
+            "symbol": t.symbol,
+            "lots": t.lots,
+            "price": t.price,
+            "pnl": 0,  # Would need to calculate actual P&L
+        }
+        for t in account.trades
+        if t.timestamp >= week_start
+    ]
+
+    # Get IHSG performance (simplified)
+    ihsg_return = 0.0
+    try:
+        ihsg_df = source.get_price_history("^JKSE", period="1wk")
+        if not ihsg_df.empty and len(ihsg_df) >= 2:
+            ihsg_return = (ihsg_df["close"].iloc[-1] / ihsg_df["close"].iloc[0] - 1) * 100
+    except Exception:
+        pass
+
+    review = generate_weekly_review(
+        portfolio=portfolio,
+        trades_this_week=trades_this_week,
+        ihsg_weekly_return=ihsg_return,
+    )
+    console.print(format_weekly_review(review))
 
 
 if __name__ == "__main__":
