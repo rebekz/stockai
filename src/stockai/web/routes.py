@@ -14,8 +14,16 @@ from stockai import __version__
 from stockai.data.database import init_database
 from stockai.data.sources.yahoo import YahooFinanceSource
 from stockai.data.sources.idx import IDXIndexSource
-from stockai.web.schemas import WatchlistItemListResponse, WatchlistItemResponse
-from stockai.web.services.watchlist import get_watchlist_items
+from stockai.web.schemas import (
+    WatchlistItemCreate,
+    WatchlistItemListResponse,
+    WatchlistItemResponse,
+)
+from stockai.web.services.watchlist import (
+    add_to_watchlist,
+    get_watchlist_items,
+    WatchlistItemExistsError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +251,34 @@ async def list_watchlist() -> dict:
         "count": len(response_items),
         "items": response_items,
     }
+
+
+@api_router.post("/watchlist", response_model=WatchlistItemResponse, status_code=201)
+async def create_watchlist_item(item: WatchlistItemCreate) -> WatchlistItemResponse:
+    """Add a stock to the watchlist.
+
+    Accepts stock symbol (or stock_id), optional alert prices, and notes.
+    If the stock doesn't exist in the database, it will be created.
+
+    Returns 409 Conflict if the stock is already in the watchlist.
+    """
+    init_database()
+
+    try:
+        watchlist_item = add_to_watchlist(
+            stock_id=item.stock_id,
+            symbol=item.symbol,
+            alert_price_above=item.alert_price_above,
+            alert_price_below=item.alert_price_below,
+            notes=item.notes,
+        )
+    except WatchlistItemExistsError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Stock {e.symbol} is already in the watchlist",
+        )
+
+    return WatchlistItemResponse.model_validate(watchlist_item)
 
 
 # ============ PAGE ROUTES ============
