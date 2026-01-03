@@ -169,12 +169,22 @@ class TradingOrchestrator:
         # Extract model ID from config (e.g., "gemini/gemini-2.0-flash" -> "gemini-2.0-flash")
         model_id = self.config.model.split("/")[-1] if "/" in self.config.model else self.config.model
 
+        # Build generation config with thinking enabled for supported models
+        generation_config = {}
+        if "preview" in model_id or "3-" in model_id:
+            # Enable thinking mode for Gemini 3.x models
+            # Options: MINIMAL, LOW, MEDIUM, HIGH
+            generation_config["thinking_config"] = {
+                "thinking_level": self.config.thinking_level
+            }
+
         return ChatGoogleGenerativeAI(
             model=model_id,
             google_api_key=settings.google_api_key,
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens,
             convert_system_message_to_human=True,
+            model_kwargs=generation_config if generation_config else None,
         )
 
     def _initialize_agents(self) -> dict[str, Any]:
@@ -522,7 +532,19 @@ Provide your analysis following your standard output format. Include a score fro
             ]
 
             response = self.llm.invoke(messages)
-            analysis = response.content
+
+            # Handle Gemini 3 thinking mode response format (returns list)
+            content = response.content
+            if isinstance(content, list):
+                # Extract text from structured response
+                analysis = ""
+                for item in content:
+                    if isinstance(item, dict) and "text" in item:
+                        analysis += item["text"]
+                    elif isinstance(item, str):
+                        analysis += item
+            else:
+                analysis = content
 
             # Extract score from analysis
             score = self._extract_score(analysis)
