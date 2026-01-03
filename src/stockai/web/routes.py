@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from stockai import __version__
+from stockai.data.cache import async_cached
 from stockai.data.database import init_database
 from stockai.data.sources.yahoo import YahooFinanceSource
 from stockai.data.sources.idx import IDXIndexSource
@@ -155,26 +156,30 @@ async def get_portfolio_analytics() -> dict:
 
 
 @api_router.get("/sentiment/{symbol}")
+@async_cached("sentiment")
 async def get_sentiment(
     symbol: str,
     days: int = Query(7, description="Days of news to analyze"),
 ) -> dict:
     """Get sentiment analysis for a stock."""
+    # Normalize symbol for consistent cache keys
+    symbol = symbol.upper()
+
     from stockai.core.sentiment import SentimentAnalyzer, NewsAggregator
 
     news_agg = NewsAggregator()
-    articles = news_agg.fetch_all(symbol.upper(), max_articles=15, days_back=days)
+    articles = news_agg.fetch_all(symbol, max_articles=15, days_back=days)
 
     if not articles:
         return {
-            "symbol": symbol.upper(),
+            "symbol": symbol,
             "article_count": 0,
             "sentiment": None,
             "message": "No recent news found",
         }
 
     analyzer = SentimentAnalyzer()
-    aggregated = analyzer.aggregate_sentiment(articles, symbol.upper())
+    aggregated = analyzer.aggregate_sentiment(articles, symbol)
 
     return aggregated.to_dict()
 
