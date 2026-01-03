@@ -365,6 +365,31 @@ async def get_stock_accuracy(symbol: str) -> dict:
     return metrics
 
 
+@api_router.post("/predictions/backfill")
+async def backfill_prediction_accuracy() -> dict:
+    """Trigger accuracy backfill for past predictions.
+
+    Updates all predictions where target_date has passed but accuracy
+    has not yet been calculated. Fetches actual price data and determines
+    if each prediction was correct.
+
+    Returns:
+        Dictionary with backfill statistics:
+        - updated_count: Number of predictions successfully updated
+        - skipped_count: Number of predictions skipped (missing price data)
+        - error_count: Number of predictions that encountered errors
+        - total_pending: Total number of predictions that needed updating
+    """
+    init_database()
+
+    from stockai.core.predictor import PredictionAccuracyTracker
+
+    tracker = PredictionAccuracyTracker()
+    result = tracker.update_past_predictions()
+
+    return result
+
+
 @api_router.get("/export/{symbol}")
 async def export_stock_report(symbol: str) -> dict:
     """Generate stock analysis report data for PDF export.
