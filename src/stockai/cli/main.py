@@ -2519,6 +2519,175 @@ def predictions_accuracy(
     console.print()
 
 
+@predictions_app.command("backfill")
+def predictions_backfill(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show what would be updated without making changes"
+    ),
+) -> None:
+    """Backfill prediction accuracy data.
+
+    Updates past predictions with actual outcomes by comparing
+    predicted direction with actual price movements.
+
+    Examples:
+        stock predictions backfill
+        stock predictions backfill --dry-run
+    """
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+
+    from stockai.data.database import init_database
+    from stockai.core.predictor import PredictionAccuracyTracker
+
+    init_database()
+    tracker = PredictionAccuracyTracker()
+
+    console.print("\n[bold]🔄 Prediction Accuracy Backfill[/bold]\n")
+
+    if dry_run:
+        console.print("[yellow]🔍 Dry run mode - no changes will be made[/yellow]\n")
+
+        # Get pending predictions to show what would be updated
+        pending = tracker.get_pending_predictions()
+
+        if not pending:
+            console.print(
+                Panel(
+                    "[green]✓ No pending predictions to update[/green]\n\n"
+                    "All predictions with past target dates have already been evaluated.",
+                    title="📋 Dry Run Results",
+                    border_style="green",
+                )
+            )
+            return
+
+        console.print(f"[cyan]Found {len(pending)} predictions to update:[/cyan]\n")
+
+        # Show sample of pending predictions
+        pending_table = Table(title="📋 Pending Predictions", show_header=True)
+        pending_table.add_column("Symbol", style="cyan")
+        pending_table.add_column("Target Date", style="dim")
+        pending_table.add_column("Direction", justify="center")
+        pending_table.add_column("Confidence", justify="right")
+
+        # Group by symbol for summary
+        symbol_counts: dict[str, int] = {}
+        for pred in pending:
+            symbol = pred.get("symbol", "?")
+            symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
+
+        # Show first 10 predictions
+        for pred in pending[:10]:
+            symbol = pred.get("symbol", "?")
+            target_date = pred.get("target_date")
+            date_str = target_date.strftime("%Y-%m-%d") if target_date else "?"
+
+            direction = pred.get("direction", "?")
+            if direction == "UP":
+                dir_str = "[green]📈 UP[/green]"
+            elif direction == "DOWN":
+                dir_str = "[red]📉 DOWN[/red]"
+            else:
+                dir_str = "[dim]➡️ NEUTRAL[/dim]"
+
+            confidence = pred.get("confidence")
+            conf_str = f"{confidence:.1%}" if confidence else "[dim]-[/dim]"
+
+            pending_table.add_row(symbol, date_str, dir_str, conf_str)
+
+        console.print(pending_table)
+
+        if len(pending) > 10:
+            console.print(f"\n[dim]... and {len(pending) - 10} more predictions[/dim]")
+
+        # Show summary by symbol
+        console.print("\n[bold]📊 Summary by Symbol:[/bold]")
+        for symbol, count in sorted(symbol_counts.items(), key=lambda x: -x[1]):
+            console.print(f"  • {symbol}: {count} predictions")
+
+        console.print(
+            f"\n[yellow]Run without --dry-run to update these {len(pending)} predictions[/yellow]"
+        )
+        return
+
+    # Perform actual backfill
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Fetching pending predictions...", total=None)
+
+        # First get count of pending predictions
+        pending = tracker.get_pending_predictions()
+        pending_count = len(pending)
+
+        if pending_count == 0:
+            console.print(
+                Panel(
+                    "[green]✓ No pending predictions to update[/green]\n\n"
+                    "All predictions with past target dates have already been evaluated.",
+                    title="📋 Backfill Complete",
+                    border_style="green",
+                )
+            )
+            return
+
+        progress.update(task, description=f"Updating {pending_count} predictions...")
+
+        # Perform backfill
+        result = tracker.update_past_predictions()
+
+    # Display results
+    updated = result.get("updated_count", 0)
+    skipped = result.get("skipped_count", 0)
+    errors = result.get("error_count", 0)
+    total = result.get("total_pending", 0)
+
+    # Determine overall status
+    if errors == 0 and skipped == 0:
+        status_color = "green"
+        status_icon = "✓"
+        status_text = "Backfill completed successfully"
+    elif errors > 0:
+        status_color = "yellow"
+        status_icon = "⚠"
+        status_text = "Backfill completed with some errors"
+    else:
+        status_color = "blue"
+        status_icon = "ℹ"
+        status_text = "Backfill completed with some skipped predictions"
+
+    console.print(
+        Panel(
+            f"[{status_color}]{status_icon} {status_text}[/{status_color}]\n\n"
+            f"[bold cyan]Total Processed:[/bold cyan] {total}\n"
+            f"[bold green]Updated:[/bold green] {updated}\n"
+            f"[bold yellow]Skipped:[/bold yellow] {skipped} (missing price data)\n"
+            f"[bold red]Errors:[/bold red] {errors}",
+            title="📋 Backfill Results",
+            border_style=status_color,
+        )
+    )
+
+    # Show errors if any
+    error_list = result.get("errors", [])
+    if error_list:
+        console.print("\n[bold red]Errors encountered:[/bold red]")
+        for err in error_list:
+            console.print(f"  [red]• {err}[/red]")
+
+    # Show next steps
+    if updated > 0:
+        console.print(
+            "\n[dim]View accuracy metrics with:[/dim]\n"
+            "  stock predictions accuracy"
+        )
+
+    console.print()
+
+
 # Watchlist subcommand group
 watchlist_app = typer.Typer(help="Manage stock watchlist")
 app.add_typer(watchlist_app, name="watchlist")
