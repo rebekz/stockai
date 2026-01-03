@@ -15,6 +15,7 @@ from stockai.data.database import init_database
 from stockai.data.sources.yahoo import YahooFinanceSource
 from stockai.data.sources.idx import IDXIndexSource
 from stockai.web.schemas import (
+    WatchlistDeleteResponse,
     WatchlistItemCreate,
     WatchlistItemListResponse,
     WatchlistItemResponse,
@@ -24,6 +25,7 @@ from stockai.web.services.watchlist import (
     add_to_watchlist,
     get_watchlist_items,
     get_watchlist_item_by_id,
+    remove_from_watchlist,
     update_watchlist_item,
     WatchlistItemExistsError,
     WatchlistItemNotFoundError,
@@ -358,6 +360,29 @@ async def update_watchlist_item_endpoint(
         )
 
     return WatchlistItemResponse.model_validate(item)
+
+
+@api_router.delete("/watchlist/{item_id}", response_model=WatchlistDeleteResponse)
+async def delete_watchlist_item(item_id: int) -> WatchlistDeleteResponse:
+    """Remove a stock from the watchlist by watchlist item ID.
+
+    Returns the deleted watchlist item information for confirmation.
+    Returns 404 if the watchlist item is not found.
+    """
+    init_database()
+
+    try:
+        deleted_item = remove_from_watchlist(item_id)
+    except WatchlistItemNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Watchlist item with id={item_id} not found",
+        )
+
+    return WatchlistDeleteResponse(
+        message=f"Successfully removed {deleted_item.stock.symbol} from watchlist",
+        deleted_item=WatchlistItemResponse.model_validate(deleted_item),
+    )
 
 
 # ============ PAGE ROUTES ============
