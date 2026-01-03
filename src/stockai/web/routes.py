@@ -22,6 +22,7 @@ from stockai.web.schemas import (
 from stockai.web.services.watchlist import (
     add_to_watchlist,
     get_watchlist_items,
+    get_watchlist_item_by_id,
     WatchlistItemExistsError,
 )
 
@@ -279,6 +280,26 @@ async def create_watchlist_item(item: WatchlistItemCreate) -> WatchlistItemRespo
         )
 
     return WatchlistItemResponse.model_validate(watchlist_item)
+
+
+@api_router.get("/watchlist/{item_id}", response_model=WatchlistItemResponse)
+async def get_watchlist_item(item_id: int) -> WatchlistItemResponse:
+    """Get a single watchlist item by its ID.
+
+    Returns the watchlist item with associated stock information (symbol, name, sector).
+    Returns 404 if the watchlist item is not found.
+    """
+    init_database()
+
+    item = get_watchlist_item_by_id(item_id)
+
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Watchlist item with id={item_id} not found",
+        )
+
+    return WatchlistItemResponse.model_validate(item)
 
 
 # ============ PAGE ROUTES ============
