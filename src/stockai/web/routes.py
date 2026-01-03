@@ -331,6 +331,40 @@ async def get_prediction_accuracy() -> dict:
     return metrics
 
 
+@api_router.get("/predictions/accuracy/{symbol}")
+async def get_stock_accuracy(symbol: str) -> dict:
+    """Get prediction accuracy metrics for a specific stock.
+
+    Returns stock-specific accuracy statistics including:
+    - Overall accuracy rate for the stock
+    - Accuracy breakdown by direction (UP/DOWN/NEUTRAL)
+    - Accuracy breakdown by confidence level (HIGH/MEDIUM/LOW)
+    - Recent predictions with outcomes
+    - Monthly accuracy trend
+
+    Args:
+        symbol: Stock ticker symbol (e.g., "BBRI.JK")
+
+    Raises:
+        HTTPException 404: If the stock is not found or has no predictions
+    """
+    init_database()
+
+    from stockai.core.predictor import PredictionAccuracyTracker
+
+    tracker = PredictionAccuracyTracker()
+    metrics = tracker.get_stock_accuracy(symbol.upper())
+
+    # Check if stock was not found or has no predictions
+    if "message" in metrics:
+        raise HTTPException(
+            status_code=404,
+            detail=metrics["message"],
+        )
+
+    return metrics
+
+
 @api_router.get("/export/{symbol}")
 async def export_stock_report(symbol: str) -> dict:
     """Generate stock analysis report data for PDF export.
