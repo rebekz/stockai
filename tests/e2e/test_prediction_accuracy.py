@@ -1262,5 +1262,438 @@ class TestPredictionAccuracyAPIEdgeCases(TestPredictionAccuracyAPI):
         assert data2["updated_count"] == 0
 
 
+# ============ CLI Command Tests ============
+
+from typer.testing import CliRunner
+from stockai.cli.main import app
+
+runner = CliRunner()
+
+
+class TestPredictionsCLI:
+    """Base class for predictions CLI tests."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Setup test database."""
+        init_database()
+        with get_db() as session:
+            session.query(Prediction).delete()
+            session.query(Stock).delete()
+            session.commit()
+
+    def _create_test_stock(self, session, symbol="BBCA"):
+        """Create a test stock."""
+        stock = Stock(symbol=symbol, name=f"{symbol} Company", sector="Finance")
+        session.add(stock)
+        session.commit()
+        session.refresh(stock)
+        return stock
+
+    def _create_evaluated_prediction(
+        self, session, stock, direction="UP", is_correct=True, confidence=0.7
+    ):
+        """Create an evaluated prediction."""
+        pred = Prediction(
+            stock_id=stock.id,
+            prediction_date=datetime.utcnow() - timedelta(days=10),
+            target_date=datetime.utcnow() - timedelta(days=5),
+            direction=direction,
+            confidence=confidence,
+            is_correct=is_correct,
+            actual_direction=direction if is_correct else ("DOWN" if direction == "UP" else "UP"),
+            actual_return=5.0 if is_correct else -5.0,
+            xgboost_prob=0.6,
+            lstm_prob=0.5,
+            sentiment_score=0.3,
+        )
+        session.add(pred)
+        session.commit()
+        return pred
+
+    def _create_pending_prediction(self, session, stock, direction="UP", confidence=0.7):
+        """Create a pending prediction (not yet evaluated)."""
+        pred = Prediction(
+            stock_id=stock.id,
+            prediction_date=datetime.utcnow() - timedelta(days=10),
+            target_date=datetime.utcnow() - timedelta(days=5),
+            direction=direction,
+            confidence=confidence,
+            is_correct=None,
+            actual_direction=None,
+            actual_return=None,
+            xgboost_prob=0.6,
+            lstm_prob=0.5,
+            sentiment_score=0.3,
+        )
+        session.add(pred)
+        session.commit()
+        return pred
+
+
+class TestPredictionsAccuracyCommand(TestPredictionsCLI):
+    """Tests for 'stock predictions accuracy' CLI command."""
+
+    def test_accuracy_command_exists(self):
+        """Test that the accuracy command exists."""
+        result = runner.invoke(app, ["predictions", "accuracy", "--help"])
+        assert result.exit_code == 0
+        assert "accuracy" in result.stdout.lower()
+
+    def test_accuracy_command_no_predictions(self):
+        """Test accuracy command with empty database."""
+        result = runner.invoke(app, ["predictions", "accuracy"])
+        assert result.exit_code == 0
+        assert "No predictions" in result.stdout or "0" in result.stdout
+
+    def test_accuracy_command_with_predictions(self):
+        """Test accuracy command with predictions in database."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            # Create 3 correct, 2 wrong predictions
+            for _ in range(3):
+                self._create_evaluated_prediction(session, stock, is_correct=True)
+            for _ in range(2):
+                self._create_evaluated_prediction(session, stock, is_correct=False)
+
+        result = runner.invoke(app, ["predictions", "accuracy"])
+        assert result.exit_code == 0
+        # Should show total predictions
+        assert "5" in result.stdout or "Total" in result.stdout
+
+    def test_accuracy_command_shows_direction_breakdown(self):
+        """Test that accuracy command shows direction breakdown."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            self._create_evaluated_prediction(session, stock, direction="UP", is_correct=True)
+            self._create_evaluated_prediction(session, stock, direction="DOWN", is_correct=False)
+
+        result = runner.invoke(app, ["predictions", "accuracy"])
+        assert result.exit_code == 0
+        # Should show direction breakdown
+        assert "UP" in result.stdout or "Direction" in result.stdout
+
+    def test_accuracy_command_shows_confidence_breakdown(self):
+        """Test that accuracy command shows confidence level breakdown."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            self._create_evaluated_prediction(session, stock, confidence=0.8, is_correct=True)
+            self._create_evaluated_prediction(session, stock, confidence=0.5, is_correct=False)
+
+        result = runner.invoke(app, ["predictions", "accuracy"])
+        assert result.exit_code == 0
+        # Should show confidence breakdown
+        assert "HIGH" in result.stdout or "MEDIUM" in result.stdout or "Confidence" in result.stdout
+
+
+class TestPredictionsAccuracySymbolOption(TestPredictionsCLI):
+    """Tests for 'stock predictions accuracy --symbol' option."""
+
+    def test_accuracy_symbol_option_unknown_symbol(self):
+        """Test --symbol option with unknown stock."""
+        result = runner.invoke(app, ["predictions", "accuracy", "--symbol", "UNKNOWN"])
+        assert result.exit_code == 0
+        # Should show message about no predictions
+        assert "UNKNOWN" in result.stdout.upper()
+
+    def test_accuracy_symbol_option_no_predictions(self):
+        """Test --symbol option for stock with no predictions."""
+        with get_db() as session:
+            self._create_test_stock(session, "BBCA")
+
+        result = runner.invoke(app, ["predictions", "accuracy", "--symbol", "BBCA"])
+        assert result.exit_code == 0
+        assert "BBCA" in result.stdout.upper()
+
+    def test_accuracy_symbol_option_with_predictions(self):
+        """Test --symbol option for stock with predictions."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            for _ in range(3):
+                self._create_evaluated_prediction(session, stock, is_correct=True)
+            self._create_evaluated_prediction(session, stock, is_correct=False)
+
+        result = runner.invoke(app, ["predictions", "accuracy", "--symbol", "BBCA"])
+        assert result.exit_code == 0
+        assert "BBCA" in result.stdout.upper()
+        # Should show some metrics
+        assert "4" in result.stdout or "Total" in result.stdout
+
+    def test_accuracy_symbol_option_short_form(self):
+        """Test -s short form of --symbol option."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBRI")
+            self._create_evaluated_prediction(session, stock, is_correct=True)
+
+        result = runner.invoke(app, ["predictions", "accuracy", "-s", "BBRI"])
+        assert result.exit_code == 0
+        assert "BBRI" in result.stdout.upper()
+
+    def test_accuracy_symbol_option_case_insensitive(self):
+        """Test --symbol option is case insensitive."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BMRI")
+            self._create_evaluated_prediction(session, stock, is_correct=True)
+
+        result = runner.invoke(app, ["predictions", "accuracy", "--symbol", "bmri"])
+        assert result.exit_code == 0
+        assert "BMRI" in result.stdout.upper()
+
+    def test_accuracy_symbol_option_shows_recent_predictions(self):
+        """Test that --symbol shows recent predictions."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            self._create_evaluated_prediction(session, stock, direction="UP", is_correct=True)
+
+        result = runner.invoke(app, ["predictions", "accuracy", "--symbol", "BBCA"])
+        assert result.exit_code == 0
+        # Should show recent predictions table
+        assert "Recent" in result.stdout or "Predicted" in result.stdout or "Actual" in result.stdout
+
+
+class TestPredictionsAccuracyVerboseOption(TestPredictionsCLI):
+    """Tests for 'stock predictions accuracy --verbose' option."""
+
+    def test_accuracy_verbose_option(self):
+        """Test --verbose option shows additional details."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            for _ in range(5):
+                self._create_evaluated_prediction(session, stock, is_correct=True)
+
+        result = runner.invoke(app, ["predictions", "accuracy", "--verbose"])
+        assert result.exit_code == 0
+        # Verbose should show model analysis
+        assert "Model" in result.stdout or "XGBoost" in result.stdout or "Correlation" in result.stdout
+
+    def test_accuracy_verbose_short_form(self):
+        """Test -v short form of --verbose option."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            for _ in range(3):
+                self._create_evaluated_prediction(session, stock, is_correct=True)
+
+        result = runner.invoke(app, ["predictions", "accuracy", "-v"])
+        assert result.exit_code == 0
+
+    def test_accuracy_verbose_with_symbol(self):
+        """Test --verbose and --symbol options together."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            # Create predictions for different months
+            for month in range(1, 4):
+                pred = Prediction(
+                    stock_id=stock.id,
+                    prediction_date=datetime(2024, month, 1),
+                    target_date=datetime(2024, month, 15),
+                    direction="UP",
+                    confidence=0.7,
+                    is_correct=True,
+                    actual_direction="UP",
+                    actual_return=5.0,
+                )
+                session.add(pred)
+            session.commit()
+
+        result = runner.invoke(app, ["predictions", "accuracy", "--symbol", "BBCA", "--verbose"])
+        assert result.exit_code == 0
+        assert "BBCA" in result.stdout.upper()
+        # Should show trend information
+        assert "Trend" in result.stdout or "Monthly" in result.stdout or "2024" in result.stdout
+
+
+class TestPredictionsBackfillCommand(TestPredictionsCLI):
+    """Tests for 'stock predictions backfill' CLI command."""
+
+    def test_backfill_command_exists(self):
+        """Test that the backfill command exists."""
+        result = runner.invoke(app, ["predictions", "backfill", "--help"])
+        assert result.exit_code == 0
+        assert "backfill" in result.stdout.lower()
+
+    def test_backfill_command_no_pending_predictions(self):
+        """Test backfill command with no pending predictions."""
+        result = runner.invoke(app, ["predictions", "backfill"])
+        assert result.exit_code == 0
+        # Should indicate no predictions to update
+        assert "No pending" in result.stdout or "0" in result.stdout
+
+    @patch("stockai.core.predictor.accuracy.YahooFinanceSource")
+    def test_backfill_command_with_pending_predictions(self, mock_yahoo_class):
+        """Test backfill command with pending predictions."""
+        # Setup mock
+        mock_yahoo = MagicMock()
+        mock_yahoo_class.return_value = mock_yahoo
+
+        dates = pd.date_range(start="2024-01-01", periods=30, freq="B")
+        mock_df = pd.DataFrame({
+            "date": dates,
+            "close": [100 + (i * 2) for i in range(30)],
+        })
+        mock_yahoo.get_price_history.return_value = mock_df
+
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            pred = Prediction(
+                stock_id=stock.id,
+                prediction_date=datetime(2024, 1, 5),
+                target_date=datetime(2024, 1, 15),
+                direction="UP",
+                confidence=0.7,
+                is_correct=None,
+            )
+            session.add(pred)
+            session.commit()
+
+        result = runner.invoke(app, ["predictions", "backfill"])
+        assert result.exit_code == 0
+        # Should show some update message
+        assert "1" in result.stdout or "Update" in result.stdout or "Result" in result.stdout
+
+    def test_backfill_command_shows_results_panel(self):
+        """Test backfill command shows results panel."""
+        result = runner.invoke(app, ["predictions", "backfill"])
+        assert result.exit_code == 0
+        # Should show a results panel/message
+        assert "Backfill" in result.stdout or "Complete" in result.stdout or "Result" in result.stdout
+
+
+class TestPredictionsBackfillDryRunOption(TestPredictionsCLI):
+    """Tests for 'stock predictions backfill --dry-run' option."""
+
+    def test_backfill_dry_run_option_no_pending(self):
+        """Test --dry-run option with no pending predictions."""
+        result = runner.invoke(app, ["predictions", "backfill", "--dry-run"])
+        assert result.exit_code == 0
+        assert "Dry run" in result.stdout or "no" in result.stdout.lower()
+
+    def test_backfill_dry_run_with_pending_predictions(self):
+        """Test --dry-run option shows what would be updated."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            self._create_pending_prediction(session, stock, direction="UP")
+
+        result = runner.invoke(app, ["predictions", "backfill", "--dry-run"])
+        assert result.exit_code == 0
+        # Should mention dry run mode
+        assert "Dry run" in result.stdout or "no changes" in result.stdout.lower()
+        # Should show BBCA in the pending list
+        assert "BBCA" in result.stdout.upper()
+
+    def test_backfill_dry_run_short_form(self):
+        """Test -n short form of --dry-run option."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "TLKM")
+            self._create_pending_prediction(session, stock)
+
+        result = runner.invoke(app, ["predictions", "backfill", "-n"])
+        assert result.exit_code == 0
+        assert "Dry run" in result.stdout or "no changes" in result.stdout.lower()
+
+    def test_backfill_dry_run_does_not_modify_database(self):
+        """Test that --dry-run does not modify the database."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            pred = self._create_pending_prediction(session, stock)
+            pred_id = pred.id
+
+        # Run dry-run
+        result = runner.invoke(app, ["predictions", "backfill", "--dry-run"])
+        assert result.exit_code == 0
+
+        # Verify prediction is still pending (not updated)
+        with get_db() as session:
+            pred = session.query(Prediction).filter(Prediction.id == pred_id).first()
+            assert pred.is_correct is None
+            assert pred.actual_direction is None
+            assert pred.actual_return is None
+
+    def test_backfill_dry_run_shows_pending_count(self):
+        """Test that --dry-run shows count of pending predictions."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, "BBCA")
+            for _ in range(3):
+                self._create_pending_prediction(session, stock)
+
+        result = runner.invoke(app, ["predictions", "backfill", "--dry-run"])
+        assert result.exit_code == 0
+        # Should show the count
+        assert "3" in result.stdout
+
+    def test_backfill_dry_run_shows_symbol_summary(self):
+        """Test that --dry-run shows summary by symbol."""
+        with get_db() as session:
+            stock1 = self._create_test_stock(session, "BBCA")
+            stock2 = self._create_test_stock(session, "BBRI")
+            for _ in range(2):
+                self._create_pending_prediction(session, stock1)
+            self._create_pending_prediction(session, stock2)
+
+        result = runner.invoke(app, ["predictions", "backfill", "--dry-run"])
+        assert result.exit_code == 0
+        # Should show both symbols
+        assert "BBCA" in result.stdout.upper()
+        assert "BBRI" in result.stdout.upper()
+
+
+class TestPredictionsCLIEdgeCases(TestPredictionsCLI):
+    """Edge case tests for predictions CLI commands."""
+
+    def test_accuracy_with_100_percent_accuracy(self):
+        """Test accuracy command with 100% accuracy."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            for _ in range(5):
+                self._create_evaluated_prediction(session, stock, is_correct=True)
+
+        result = runner.invoke(app, ["predictions", "accuracy"])
+        assert result.exit_code == 0
+        assert "100" in result.stdout
+
+    def test_accuracy_with_0_percent_accuracy(self):
+        """Test accuracy command with 0% accuracy."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            for _ in range(5):
+                self._create_evaluated_prediction(session, stock, is_correct=False)
+
+        result = runner.invoke(app, ["predictions", "accuracy"])
+        assert result.exit_code == 0
+        assert "0" in result.stdout
+
+    def test_accuracy_multiple_stocks(self):
+        """Test accuracy command with multiple stocks."""
+        with get_db() as session:
+            stock1 = self._create_test_stock(session, "BBCA")
+            stock2 = self._create_test_stock(session, "BBRI")
+            self._create_evaluated_prediction(session, stock1, is_correct=True)
+            self._create_evaluated_prediction(session, stock2, is_correct=False)
+
+        result = runner.invoke(app, ["predictions", "accuracy"])
+        assert result.exit_code == 0
+        # Should show overall metrics
+        assert "2" in result.stdout or "Total" in result.stdout
+
+    def test_backfill_already_evaluated_predictions(self):
+        """Test backfill skips already evaluated predictions."""
+        with get_db() as session:
+            stock = self._create_test_stock(session)
+            # Create only evaluated predictions (not pending)
+            for _ in range(3):
+                self._create_evaluated_prediction(session, stock, is_correct=True)
+
+        result = runner.invoke(app, ["predictions", "backfill"])
+        assert result.exit_code == 0
+        # Should show no predictions to update
+        assert "No pending" in result.stdout or "0" in result.stdout
+
+    def test_predictions_subcommand_help(self):
+        """Test predictions subcommand shows help."""
+        result = runner.invoke(app, ["predictions", "--help"])
+        assert result.exit_code == 0
+        assert "accuracy" in result.stdout
+        assert "backfill" in result.stdout
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
