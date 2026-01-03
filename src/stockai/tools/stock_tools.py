@@ -218,17 +218,48 @@ def get_technical_indicators(symbol: str, period: str = "3mo") -> dict[str, Any]
 
 @stockai_tool(name="get_volume_analysis", category="analysis")
 def get_volume_analysis(symbol: str, period: str = "3mo") -> dict[str, Any]:
-    """Analyze volume-based indicators for a stock.
+    """Analyze volume-based technical indicators for comprehensive trading insights.
 
-    Computes On-Balance Volume (OBV), VWAP, Accumulation/Distribution Line,
-    Money Flow Index (MFI), and volume ratios relative to moving averages.
+    Computes key volume indicators to assess buying/selling pressure and validate
+    price movements. Volume analysis helps confirm trend strength and identify
+    potential reversals.
+
+    Indicators calculated:
+        - On-Balance Volume (OBV): Cumulative volume flow indicator. Rising OBV
+          with rising price confirms uptrend; divergence signals potential reversal.
+        - Volume Weighted Average Price (VWAP): Average price weighted by volume.
+          Price above VWAP is bullish; below is bearish.
+        - Accumulation/Distribution (A/D) Line: Measures money flow into/out of stock.
+          Rising A/D indicates accumulation (buying); falling indicates distribution.
+        - Money Flow Index (MFI): Volume-weighted RSI (0-100). Below 20 is oversold;
+          above 80 is overbought.
+        - Volume Ratios: Current volume relative to 5-day, 10-day, and 20-day averages.
+          Ratios >2.0 indicate volume spikes; <0.5 indicate low activity.
 
     Args:
-        symbol: Stock ticker symbol
-        period: Period for calculation (default 3mo for sufficient data)
+        symbol: Stock ticker symbol (e.g., 'BBCA', 'TLKM'). Will be converted to
+            uppercase and '.JK' suffix added for IDX stocks.
+        period: Historical data period for calculation. Valid values:
+            '1d', '5d', '1mo', '3mo' (default), '6mo', '1y', '2y', '5y', 'max'.
+            Longer periods provide more reliable indicator calculations.
 
     Returns:
-        Dictionary with volume indicator values and signals
+        Dictionary containing:
+            - symbol: Uppercase stock symbol
+            - current_price: Latest closing price
+            - current_volume: Latest trading volume
+            - indicators: Nested dict with 'obv', 'vwap', 'accumulation_distribution',
+              'mfi', and 'volume_ratios' sub-dictionaries, each containing values,
+              trends, and interpretations (bullish/bearish/neutral)
+            - signals: List of actionable trading signals with emoji indicators
+              (e.g., '🟢 MFI oversold', '🔴 OBV divergence')
+            - timestamp: ISO format timestamp of analysis
+            - error: Present only if analysis failed (insufficient data, etc.)
+
+    Example:
+        >>> result = get_volume_analysis("BBCA")
+        >>> result["indicators"]["mfi"]["interpretation"]
+        'oversold'  # Potential buying opportunity
     """
     logger.info(f"Calculating volume analysis for {symbol}")
 
@@ -377,18 +408,55 @@ def get_volume_analysis(symbol: str, period: str = "3mo") -> dict[str, Any]:
 
 @stockai_tool(name="get_volume_profile", category="analysis")
 def get_volume_profile(symbol: str, period: str = "1mo", num_levels: int = 20) -> dict[str, Any]:
-    """Calculate volume profile by price level for a stock.
+    """Calculate volume distribution across price levels for support/resistance analysis.
 
-    Shows where most trading volume occurred across price levels.
-    Useful for identifying support/resistance zones based on volume.
+    Volume Profile is a powerful charting tool that shows trading activity at different
+    price levels. High-volume price levels act as strong support/resistance zones,
+    while low-volume areas represent potential breakout zones.
+
+    Key concepts:
+        - Point of Control (POC): Price level with highest trading volume. Acts as
+          a strong magnet for price; excellent support/resistance zone.
+        - Value Area High (VAH): Upper boundary of the area containing 70% of volume.
+          Price above VAH indicates bullish breakout potential.
+        - Value Area Low (VAL): Lower boundary of the 70% volume area.
+          Price below VAL indicates bearish breakdown potential.
+        - High Volume Nodes (HVN): Price levels with above-average volume.
+          Price tends to consolidate around these levels.
+        - Low Volume Nodes (LVN): Price levels with below-average volume.
+          Price tends to move quickly through these areas.
 
     Args:
-        symbol: Stock ticker symbol
-        period: Period for calculation (default 1mo)
-        num_levels: Number of price levels to divide into (default 20)
+        symbol: Stock ticker symbol (e.g., 'BBCA', 'TLKM'). Will be converted to
+            uppercase and '.JK' suffix added for IDX stocks.
+        period: Historical data period for calculation. Valid values:
+            '1d', '5d', '1mo' (default), '3mo', '6mo', '1y'. Shorter periods
+            provide more relevant recent volume distribution.
+        num_levels: Number of price bins to divide the price range into.
+            Default is 20. Higher values give finer granularity but may be
+            noisier; lower values give broader zones.
 
     Returns:
-        Dictionary with volume profile data including POC, VAH, VAL
+        Dictionary containing:
+            - symbol: Uppercase stock symbol
+            - period: Analysis period used
+            - current_price: Latest closing price
+            - price_range: Dict with 'min' and 'max' prices in the period
+            - volume_profile: Dict with:
+                - poc: Point of Control with price, volume, and percentage
+                - value_area: Dict with 'high' (VAH), 'low' (VAL), and volume_percent
+                - total_volume: Total volume in the analysis period
+                - num_levels: Number of price levels used
+            - levels: List of dicts for each price level containing price_low,
+              price_high, price_mid, volume, volume_percent, is_poc, in_value_area
+            - signals: List of trading signals (e.g., '🟢 Price above Value Area High')
+            - timestamp: ISO format timestamp of analysis
+            - error: Present only if analysis failed
+
+    Example:
+        >>> result = get_volume_profile("BBCA", period="1mo")
+        >>> poc = result["volume_profile"]["poc"]["price"]
+        >>> print(f"Key support/resistance at {poc}")
     """
     logger.info(f"Calculating volume profile for {symbol}")
 
@@ -558,18 +626,68 @@ def get_volume_profile(symbol: str, period: str = "1mo", num_levels: int = 20) -
 
 @stockai_tool(name="get_volume_signals", category="analysis")
 def get_volume_signals(symbol: str, period: str = "3mo") -> dict[str, Any]:
-    """Generate actionable volume-based trading signals.
+    """Generate actionable buy/sell/neutral signals based on comprehensive volume analysis.
 
-    Combines multiple volume indicators to produce buy/sell/neutral signals
-    with confidence scores. Analyzes volume spikes, volume-price divergences,
-    and accumulation/distribution patterns.
+    This tool synthesizes multiple volume indicators into clear trading signals with
+    confidence scores. It's designed to provide actionable insights by combining:
+    volume spikes, volume-price divergences, accumulation/distribution patterns,
+    Money Flow Index extremes, and On-Balance Volume trends.
+
+    Signal types detected:
+        - Volume Spikes: Current volume >2x 20-day average. Bullish if price up,
+          bearish if price down. High-confidence momentum indicator.
+        - Volume-Price Divergence: Price rising on declining volume (bearish) or
+          price falling on declining volume (bullish - selling exhaustion).
+        - Accumulation/Distribution: Institutional buying (accumulation) or
+          selling (distribution) patterns based on A/D line trends.
+        - MFI Extremes: Money Flow Index below 20 (oversold, bullish) or
+          above 80 (overbought, bearish).
+        - OBV Trend: On-Balance Volume trending up (money flowing in) or
+          down (money flowing out).
+
+    Confidence scoring:
+        Each individual signal has a confidence score (0.0-1.0) based on the
+        strength of the underlying pattern. The overall signal aggregates these
+        with weighted scoring:
+        - Volume spikes: Weight 2.0 (most important)
+        - Volume-price divergence: Weight 1.5
+        - Accumulation/Distribution: Weight 1.5
+        - MFI extremes: Weight 1.5
+        - OBV trend: Weight 1.0
 
     Args:
-        symbol: Stock ticker symbol
-        period: Period for calculation (default 3mo for sufficient data)
+        symbol: Stock ticker symbol (e.g., 'BBCA', 'TLKM'). Will be converted to
+            uppercase and '.JK' suffix added for IDX stocks.
+        period: Historical data period for calculation. Valid values:
+            '1d', '5d', '1mo', '3mo' (default), '6mo', '1y', '2y', '5y', 'max'.
+            3 months provides good balance of data for reliable signal detection.
 
     Returns:
-        Dictionary with volume signals, confidence scores, and overall recommendation
+        Dictionary containing:
+            - symbol: Uppercase stock symbol
+            - current_price: Latest closing price
+            - current_volume: Latest trading volume
+            - volume_ratio_20d: Current volume relative to 20-day average
+            - overall_signal: Dict with:
+                - direction: 'buy', 'sell', or 'neutral'
+                - description: Human-readable signal explanation
+                - confidence: Overall confidence score (0.0-0.95)
+                - bullish_score: Normalized bullish signal strength
+                - bearish_score: Normalized bearish signal strength
+            - signal_summary: Dict with counts of bullish/bearish/neutral signals
+            - individual_signals: List of detailed signal objects, each with:
+                - type: Signal category (e.g., 'volume_spike', 'mfi_oversold')
+                - direction: 'bullish', 'bearish', or 'neutral'
+                - description: Detailed explanation
+                - confidence: Individual signal confidence
+                - details: Supporting data for the signal
+            - timestamp: ISO format timestamp of analysis
+            - error: Present only if analysis failed
+
+    Example:
+        >>> result = get_volume_signals("BBCA")
+        >>> if result["overall_signal"]["direction"] == "buy":
+        ...     print(f"Buy signal with {result['overall_signal']['confidence']:.0%} confidence")
     """
     logger.info(f"Generating volume signals for {symbol}")
 
