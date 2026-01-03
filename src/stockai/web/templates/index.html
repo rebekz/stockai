@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}StockAI Dashboard{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    <!-- Hero Section -->
+    <div class="bg-gradient-to-r from-blue-600 to-blue-800 rounded-lg shadow-xl p-8 text-white mb-8">
+        <h1 class="text-4xl font-bold mb-4">Welcome to StockAI</h1>
+        <p class="text-xl text-blue-100 mb-6">
+            AI-Powered Indonesian Stock Market Analysis
+        </p>
+        <div class="flex space-x-4">
+            <a href="/stocks" class="bg-white text-blue-600 px-6 py-3 rounded-lg font-semibold hover:bg-blue-50 transition">
+                View Stocks
+            </a>
+            <a href="/portfolio" class="border-2 border-white px-6 py-3 rounded-lg font-semibold hover:bg-white hover:text-blue-600 transition">
+                My Portfolio
+            </a>
+        </div>
+    </div>
+
+    <!-- Features Grid -->
+    <div class="grid md:grid-cols-3 gap-6 mb-8">
+        <!-- Stock Analysis -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="text-3xl mb-4">📈</div>
+            <h3 class="text-xl font-semibold mb-2">Stock Analysis</h3>
+            <p class="text-gray-600 mb-4">
+                Real-time data, technical analysis, and fundamentals for IDX stocks.
+            </p>
+            <a href="/stocks" class="text-blue-600 hover:underline">Browse Stocks →</a>
+        </div>
+
+        <!-- Portfolio Tracking -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="text-3xl mb-4">💼</div>
+            <h3 class="text-xl font-semibold mb-2">Portfolio Tracking</h3>
+            <p class="text-gray-600 mb-4">
+                Track your holdings, P&L, and get AI-powered portfolio insights.
+            </p>
+            <a href="/portfolio" class="text-blue-600 hover:underline">View Portfolio →</a>
+        </div>
+
+        <!-- Sentiment Analysis -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="text-3xl mb-4">🎯</div>
+            <h3 class="text-xl font-semibold mb-2">Sentiment Analysis</h3>
+            <p class="text-gray-600 mb-4">
+                News sentiment analysis using multilingual AI models.
+            </p>
+            <a href="/sentiment" class="text-blue-600 hover:underline">Analyze Sentiment →</a>
+        </div>
+    </div>
+
+    <!-- Quick Stats -->
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h2 class="text-2xl font-bold mb-4">Quick Stats</h2>
+        <div id="quick-stats" class="grid md:grid-cols-4 gap-4">
+            <div class="text-center p-4 bg-gray-50 rounded">
+                <div class="text-3xl font-bold text-blue-600" id="idx30-count">30</div>
+                <div class="text-gray-500">IDX30 Stocks</div>
+            </div>
+            <div class="text-center p-4 bg-gray-50 rounded">
+                <div class="text-3xl font-bold text-green-600" id="lq45-count">45</div>
+                <div class="text-gray-500">LQ45 Stocks</div>
+            </div>
+            <div class="text-center p-4 bg-gray-50 rounded">
+                <div class="text-3xl font-bold text-purple-600" id="portfolio-count">-</div>
+                <div class="text-gray-500">My Holdings</div>
+            </div>
+            <div class="text-center p-4 bg-gray-50 rounded">
+                <div class="text-3xl font-bold" id="market-sentiment">-</div>
+                <div class="text-gray-500">Market Sentiment</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Load quick stats
+async function loadStats() {
+    try {
+        // Get portfolio count
+        const portfolioRes = await fetch('/api/portfolio');
+        if (portfolioRes.ok) {
+            const portfolio = await portfolioRes.json();
+            document.getElementById('portfolio-count').textContent =
+                portfolio.summary?.position_count || 0;
+        }
+    } catch (e) {
+        console.error('Error loading stats:', e);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', loadStats);
+</script>
+{% endblock %}

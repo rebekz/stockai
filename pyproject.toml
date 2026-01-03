@@ -1,0 +1,120 @@
+[project]
+name = "stockai"
+version = "0.1.0"
+description = "AI-Powered Indonesian Stock Analysis CLI - Think Claude Code for IDX investing"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Fitra", email = "fitra@stockai.local"}
+]
+keywords = ["stocks", "indonesia", "idx", "ai", "ml", "analysis", "trading", "investment"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+
+dependencies = [
+    # CLI
+    "typer[all]>=0.9.0",
+    "rich>=13.0.0",
+
+    # Agent Framework - LangChain with Google Gemini
+    "langchain>=0.3.0",
+    "langchain-google-genai>=2.0.0",
+    "langchain-community>=0.3.0",
+    "langgraph>=0.2.0",
+    "google-generativeai>=0.8.0",
+
+    # Data
+    "yfinance>=0.2.36",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "feedparser>=6.0.0",
+    "httpx>=0.27.0",
+
+    # Database
+    "sqlalchemy>=2.0.0",
+    "duckdb>=0.9.0",
+
+    # Technical Analysis
+    "ta>=0.11.0",
+
+    # ML
+    "scikit-learn>=1.3.0",
+    "xgboost>=2.0.0",
+    "torch>=2.1.0",
+    "transformers>=4.36.0",
+
+    # Config
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.0.0",
+    "tomli>=2.0.0",
+    "python-dotenv>=1.0.0",
+
+    # Web Dashboard
+    "fastapi>=0.109.0",
+    "uvicorn>=0.25.0",
+    "jinja2>=3.1.0",
+]
+
+[project.optional-dependencies]
+web = [
+    "plotly>=5.18.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "httpx>=0.27.0",
+]
+all = [
+    "stockai[web,dev]",
+]
+
+[project.scripts]
+stock = "stockai.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/fitra/stockai"
+Documentation = "https://github.com/fitra/stockai#readme"
+Repository = "https://github.com/fitra/stockai"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stockai"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short"
+markers = [
+    "network: marks tests as requiring network access (deselect with '-m \"not network\"')",
+]

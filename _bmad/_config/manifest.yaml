@@ -1,0 +1,10 @@
+installation:
+  version: 6.0.0-alpha.22
+  installDate: 2026-01-02T16:41:36.744Z
+  lastUpdated: 2026-01-02T16:41:36.744Z
+modules:
+  - core
+  - bmm
+ides:
+  - claude-code
+  - antigravity

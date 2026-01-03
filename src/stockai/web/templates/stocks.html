@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+
+{% block title %}Stock List - StockAI{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold">Stock List</h1>
+        <div class="flex space-x-2">
+            <button id="btn-idx30" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition">
+                IDX30
+            </button>
+            <button id="btn-lq45" class="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition">
+                LQ45
+            </button>
+        </div>
+    </div>
+
+    <!-- Search -->
+    <div class="mb-6">
+        <input type="text" id="search-input" placeholder="Search stocks..."
+               class="w-full md:w-96 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+    </div>
+
+    <!-- Loading indicator -->
+    <div id="loading" class="hidden text-center py-8">
+        <div class="loader mx-auto"></div>
+        <p class="mt-4 text-gray-600">Loading stocks...</p>
+    </div>
+
+    <!-- Stock Table -->
+    <div class="bg-white rounded-lg shadow overflow-hidden">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Symbol</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Change</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Volume</th>
+                    <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="stocks-body" class="bg-white divide-y divide-gray-200">
+                {% for stock in stocks %}
+                <tr class="hover:bg-gray-50 stock-row" data-symbol="{{ stock.symbol }}" data-name="{{ stock.name | lower }}">
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="font-medium text-blue-600">{{ stock.symbol }}</span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {{ stock.name | default('-') }}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right">
+                        {{ "Rp {:,.0f}".format(stock.price) if stock.price else '-' }}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right">
+                        {% if stock.change_pct is defined %}
+                            <span class="{{ 'positive' if stock.change_pct >= 0 else 'negative' }}">
+                                {{ "{:+.2f}%".format(stock.change_pct) }}
+                            </span>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-500">
+                        {{ "{:,.0f}".format(stock.volume) if stock.volume else '-' }}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-center text-sm">
+                        <a href="/analyze/{{ stock.symbol }}" class="text-blue-600 hover:text-blue-800 mr-3">
+                            Analyze
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Empty State -->
+    <div id="empty-state" class="hidden text-center py-12">
+        <div class="text-5xl mb-4">📭</div>
+        <p class="text-gray-600">No stocks found matching your search.</p>
+    </div>
+</div>
+
+<script>
+const stockRows = document.querySelectorAll('.stock-row');
+const searchInput = document.getElementById('search-input');
+const emptyState = document.getElementById('empty-state');
+const btnIdx30 = document.getElementById('btn-idx30');
+const btnLq45 = document.getElementById('btn-lq45');
+const loading = document.getElementById('loading');
+
+// Search functionality
+searchInput.addEventListener('input', function() {
+    const query = this.value.toLowerCase();
+    let visibleCount = 0;
+
+    stockRows.forEach(row => {
+        const symbol = row.dataset.symbol.toLowerCase();
+        const name = row.dataset.name;
+        const matches = symbol.includes(query) || name.includes(query);
+        row.style.display = matches ? '' : 'none';
+        if (matches) visibleCount++;
+    });
+
+    emptyState.classList.toggle('hidden', visibleCount > 0);
+});
+
+// Helper to create stock row using safe DOM methods
+function createStockRow(stock) {
+    const tr = document.createElement('tr');
+    tr.className = 'hover:bg-gray-50 stock-row';
+    tr.dataset.symbol = stock.symbol;
+    tr.dataset.name = (stock.name || '').toLowerCase();
+
+    // Symbol cell
+    const tdSymbol = document.createElement('td');
+    tdSymbol.className = 'px-6 py-4 whitespace-nowrap';
+    const spanSymbol = document.createElement('span');
+    spanSymbol.className = 'font-medium text-blue-600';
+    spanSymbol.textContent = stock.symbol;
+    tdSymbol.appendChild(spanSymbol);
+    tr.appendChild(tdSymbol);
+
+    // Name cell
+    const tdName = document.createElement('td');
+    tdName.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-900';
+    tdName.textContent = stock.name || '-';
+    tr.appendChild(tdName);
+
+    // Price cell
+    const tdPrice = document.createElement('td');
+    tdPrice.className = 'px-6 py-4 whitespace-nowrap text-sm text-right';
+    tdPrice.textContent = stock.price ? 'Rp ' + stock.price.toLocaleString() : '-';
+    tr.appendChild(tdPrice);
+
+    // Change cell
+    const tdChange = document.createElement('td');
+    tdChange.className = 'px-6 py-4 whitespace-nowrap text-sm text-right';
+    if (stock.change_pct !== undefined) {
+        const spanChange = document.createElement('span');
+        spanChange.className = stock.change_pct >= 0 ? 'positive' : 'negative';
+        spanChange.textContent = (stock.change_pct >= 0 ? '+' : '') + stock.change_pct.toFixed(2) + '%';
+        tdChange.appendChild(spanChange);
+    } else {
+        tdChange.textContent = '-';
+    }
+    tr.appendChild(tdChange);
+
+    // Volume cell
+    const tdVolume = document.createElement('td');
+    tdVolume.className = 'px-6 py-4 whitespace-nowrap text-sm text-right text-gray-500';
+    tdVolume.textContent = stock.volume ? stock.volume.toLocaleString() : '-';
+    tr.appendChild(tdVolume);
+
+    // Actions cell
+    const tdActions = document.createElement('td');
+    tdActions.className = 'px-6 py-4 whitespace-nowrap text-center text-sm';
+    const linkAnalyze = document.createElement('a');
+    linkAnalyze.href = '/analyze/' + encodeURIComponent(stock.symbol);
+    linkAnalyze.className = 'text-blue-600 hover:text-blue-800 mr-3';
+    linkAnalyze.textContent = 'Analyze';
+    tdActions.appendChild(linkAnalyze);
+    tr.appendChild(tdActions);
+
+    return tr;
+}
+
+// Index switcher
+async function loadIndex(indexName) {
+    loading.classList.remove('hidden');
+
+    try {
+        const res = await fetch('/api/stocks?index=' + encodeURIComponent(indexName) + '&include_prices=true');
+        const data = await res.json();
+
+        // Clear and update table using safe DOM methods
+        const tbody = document.getElementById('stocks-body');
+        while (tbody.firstChild) {
+            tbody.removeChild(tbody.firstChild);
+        }
+
+        data.stocks.forEach(stock => {
+            tbody.appendChild(createStockRow(stock));
+        });
+
+        // Update buttons
+        btnIdx30.classList.toggle('bg-blue-600', indexName === 'IDX30');
+        btnIdx30.classList.toggle('text-white', indexName === 'IDX30');
+        btnIdx30.classList.toggle('bg-gray-200', indexName !== 'IDX30');
+        btnIdx30.classList.toggle('text-gray-700', indexName !== 'IDX30');
+
+        btnLq45.classList.toggle('bg-blue-600', indexName === 'LQ45');
+        btnLq45.classList.toggle('text-white', indexName === 'LQ45');
+        btnLq45.classList.toggle('bg-gray-200', indexName !== 'LQ45');
+        btnLq45.classList.toggle('text-gray-700', indexName !== 'LQ45');
+
+    } catch (e) {
+        console.error('Error loading stocks:', e);
+    } finally {
+        loading.classList.add('hidden');
+    }
+}
+
+btnIdx30.addEventListener('click', () => loadIndex('IDX30'));
+btnLq45.addEventListener('click', () => loadIndex('LQ45'));
+</script>
+{% endblock %}

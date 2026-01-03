@@ -1,0 +1,273 @@
+"""Database Models for StockAI.
+
+SQLAlchemy ORM models for storing stock data, predictions, and portfolio.
+"""
+
+from datetime import datetime
+from decimal import Decimal
+from typing import Optional
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+)
+from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
+
+
+class Base(DeclarativeBase):
+    """Base class for all models."""
+
+    pass
+
+
+class Stock(Base):
+    """Stock information model."""
+
+    __tablename__ = "stocks"
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(10), unique=True, nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    sector = Column(String(100))
+    industry = Column(String(100))
+    market_cap = Column(Numeric(20, 2))
+    is_idx30 = Column(Boolean, default=False)
+    is_lq45 = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    prices = relationship("StockPrice", back_populates="stock", cascade="all, delete-orphan")
+    predictions = relationship("Prediction", back_populates="stock", cascade="all, delete-orphan")
+    portfolio_items = relationship("PortfolioItem", back_populates="stock")
+    watchlist_items = relationship("WatchlistItem", back_populates="stock")
+
+    def __repr__(self) -> str:
+        return f"<Stock(symbol='{self.symbol}', name='{self.name}')>"
+
+
+class StockPrice(Base):
+    """Daily stock price data (OHLCV)."""
+
+    __tablename__ = "stock_prices"
+
+    id = Column(Integer, primary_key=True)
+    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False)
+    date = Column(DateTime, nullable=False)
+    open = Column(Numeric(12, 2), nullable=False)
+    high = Column(Numeric(12, 2), nullable=False)
+    low = Column(Numeric(12, 2), nullable=False)
+    close = Column(Numeric(12, 2), nullable=False)
+    volume = Column(Integer, nullable=False)
+    adjusted_close = Column(Numeric(12, 2))
+
+    # Technical indicators (cached)
+    rsi_14 = Column(Float)
+    macd = Column(Float)
+    macd_signal = Column(Float)
+    macd_hist = Column(Float)
+    bb_upper = Column(Float)
+    bb_middle = Column(Float)
+    bb_lower = Column(Float)
+    sma_20 = Column(Float)
+    sma_50 = Column(Float)
+    ema_12 = Column(Float)
+    ema_26 = Column(Float)
+    atr_14 = Column(Float)
+    stoch_k = Column(Float)
+    stoch_d = Column(Float)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    stock = relationship("Stock", back_populates="prices")
+
+    __table_args__ = (
+        UniqueConstraint("stock_id", "date", name="uix_stock_date"),
+        Index("ix_stock_prices_date", "date"),
+        Index("ix_stock_prices_stock_date", "stock_id", "date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<StockPrice(stock_id={self.stock_id}, date='{self.date}', close={self.close})>"
+
+
+class Prediction(Base):
+    """ML prediction results."""
+
+    __tablename__ = "predictions"
+
+    id = Column(Integer, primary_key=True)
+    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False)
+    prediction_date = Column(DateTime, nullable=False)
+    target_date = Column(DateTime, nullable=False)
+    direction = Column(String(10), nullable=False)  # UP, DOWN, NEUTRAL
+    confidence = Column(Float, nullable=False)
+
+    # Model contributions
+    xgboost_prob = Column(Float)
+    lstm_prob = Column(Float)
+    sentiment_score = Column(Float)
+    ensemble_prob = Column(Float)
+
+    # Features used
+    feature_importance = Column(Text)  # JSON string
+
+    # Actual outcome (filled later)
+    actual_direction = Column(String(10))
+    actual_return = Column(Float)
+    is_correct = Column(Boolean)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    stock = relationship("Stock", back_populates="predictions")
+
+    __table_args__ = (
+        Index("ix_predictions_stock_date", "stock_id", "prediction_date"),
+        Index("ix_predictions_target", "target_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Prediction(stock_id={self.stock_id}, direction='{self.direction}', confidence={self.confidence})>"
+
+
+class PortfolioItem(Base):
+    """User's portfolio holdings."""
+
+    __tablename__ = "portfolio_items"
+
+    id = Column(Integer, primary_key=True)
+    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False)
+    shares = Column(Integer, nullable=False)
+    avg_price = Column(Numeric(12, 2), nullable=False)
+    purchase_date = Column(DateTime, default=datetime.utcnow)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    stock = relationship("Stock", back_populates="portfolio_items")
+    transactions = relationship(
+        "PortfolioTransaction", back_populates="portfolio_item", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<PortfolioItem(stock_id={self.stock_id}, shares={self.shares})>"
+
+
+class PortfolioTransaction(Base):
+    """Portfolio buy/sell transactions."""
+
+    __tablename__ = "portfolio_transactions"
+
+    id = Column(Integer, primary_key=True)
+    portfolio_item_id = Column(Integer, ForeignKey("portfolio_items.id"), nullable=False)
+    transaction_type = Column(String(10), nullable=False)  # BUY, SELL
+    shares = Column(Integer, nullable=False)
+    price = Column(Numeric(12, 2), nullable=False)
+    transaction_date = Column(DateTime, default=datetime.utcnow)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    portfolio_item = relationship("PortfolioItem", back_populates="transactions")
+
+    def __repr__(self) -> str:
+        return f"<PortfolioTransaction(type='{self.transaction_type}', shares={self.shares})>"
+
+
+class WatchlistItem(Base):
+    """User's stock watchlist."""
+
+    __tablename__ = "watchlist_items"
+
+    id = Column(Integer, primary_key=True)
+    stock_id = Column(Integer, ForeignKey("stocks.id"), nullable=False)
+    alert_price_above = Column(Numeric(12, 2))
+    alert_price_below = Column(Numeric(12, 2))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    stock = relationship("Stock", back_populates="watchlist_items")
+
+    __table_args__ = (UniqueConstraint("stock_id", name="uix_watchlist_stock"),)
+
+    def __repr__(self) -> str:
+        return f"<WatchlistItem(stock_id={self.stock_id})>"
+
+
+class NewsArticle(Base):
+    """News articles for sentiment analysis."""
+
+    __tablename__ = "news_articles"
+
+    id = Column(Integer, primary_key=True)
+    stock_id = Column(Integer, ForeignKey("stocks.id"))
+    title = Column(String(500), nullable=False)
+    url = Column(String(1000), nullable=False, unique=True)
+    source = Column(String(100))
+    published_at = Column(DateTime)
+    content = Column(Text)
+    summary = Column(Text)
+
+    # Sentiment analysis
+    sentiment_score = Column(Float)  # -1 to 1
+    sentiment_label = Column(String(20))  # POSITIVE, NEGATIVE, NEUTRAL
+    sentiment_confidence = Column(Float)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_news_stock_date", "stock_id", "published_at"),
+        Index("ix_news_published", "published_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<NewsArticle(title='{self.title[:50]}...')>"
+
+
+class AgentMemory(Base):
+    """Agent conversation and research memory."""
+
+    __tablename__ = "agent_memories"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(String(50), nullable=False, index=True)
+    memory_type = Column(String(50), nullable=False)  # research, conversation, insight
+    stock_id = Column(Integer, ForeignKey("stocks.id"))
+    content = Column(Text, nullable=False)
+    extra_data = Column(Text)  # JSON string for metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (Index("ix_agent_memory_session", "session_id", "memory_type"),)
+
+    def __repr__(self) -> str:
+        return f"<AgentMemory(session='{self.session_id}', type='{self.memory_type}')>"
+
+
+class CacheEntry(Base):
+    """Generic cache storage."""
+
+    __tablename__ = "cache_entries"
+
+    id = Column(Integer, primary_key=True)
+    cache_key = Column(String(255), unique=True, nullable=False, index=True)
+    cache_value = Column(Text, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<CacheEntry(key='{self.cache_key}')>"

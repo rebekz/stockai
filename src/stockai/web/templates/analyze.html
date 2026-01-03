@@ -1,0 +1,352 @@
+{% extends "base.html" %}
+
+{% block title %}Analyze {{ symbol }} - StockAI{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">{{ symbol }}</h1>
+            <p class="text-gray-600">{{ stock_info.name | default('Indonesian Stock') }}</p>
+        </div>
+        <div class="flex space-x-2">
+            <a href="/stocks" class="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition">
+                Back to List
+            </a>
+            <button id="btn-export" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition">
+                Export PDF
+            </button>
+        </div>
+    </div>
+
+    <!-- Price Card -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <div class="grid md:grid-cols-4 gap-4">
+            <div>
+                <div class="text-sm text-gray-500">Current Price</div>
+                <div class="text-2xl font-bold" id="current-price">
+                    {{ "Rp {:,.0f}".format(stock_info.price) if stock_info.price else 'Loading...' }}
+                </div>
+            </div>
+            <div>
+                <div class="text-sm text-gray-500">Change</div>
+                <div class="text-xl font-semibold" id="price-change">
+                    {% if stock_info.change_pct is defined %}
+                        <span class="{{ 'positive' if stock_info.change_pct >= 0 else 'negative' }}">
+                            {{ "{:+.2f}%".format(stock_info.change_pct) }}
+                        </span>
+                    {% else %}
+                        -
+                    {% endif %}
+                </div>
+            </div>
+            <div>
+                <div class="text-sm text-gray-500">Volume</div>
+                <div class="text-xl" id="volume">
+                    {{ "{:,.0f}".format(stock_info.volume) if stock_info.volume else '-' }}
+                </div>
+            </div>
+            <div>
+                <div class="text-sm text-gray-500">Market Cap</div>
+                <div class="text-xl" id="market-cap">
+                    {{ stock_info.market_cap | default('-') }}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chart Section -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-xl font-bold">Price Chart</h2>
+            <div class="flex space-x-2">
+                <button class="period-btn px-3 py-1 text-sm rounded bg-gray-200 hover:bg-gray-300" data-period="1mo">1M</button>
+                <button class="period-btn px-3 py-1 text-sm rounded bg-blue-600 text-white" data-period="3mo">3M</button>
+                <button class="period-btn px-3 py-1 text-sm rounded bg-gray-200 hover:bg-gray-300" data-period="6mo">6M</button>
+                <button class="period-btn px-3 py-1 text-sm rounded bg-gray-200 hover:bg-gray-300" data-period="1y">1Y</button>
+            </div>
+        </div>
+        <div id="price-chart" style="height: 400px;">
+            <div class="flex items-center justify-center h-full">
+                <div class="loader"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Analysis Grid -->
+    <div class="grid md:grid-cols-2 gap-6 mb-6">
+        <!-- Sentiment Analysis -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-bold mb-4">Sentiment Analysis</h2>
+            <div id="sentiment-content">
+                <div class="text-center py-4">
+                    <div class="loader mx-auto"></div>
+                    <p class="mt-2 text-gray-500">Analyzing news sentiment...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Prediction -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-bold mb-4">AI Prediction</h2>
+            <div id="prediction-content">
+                <div class="text-center py-4">
+                    <div class="loader mx-auto"></div>
+                    <p class="mt-2 text-gray-500">Generating prediction...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Technical Indicators -->
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h2 class="text-xl font-bold mb-4">Technical Indicators</h2>
+        <div id="technicals-content" class="grid md:grid-cols-3 gap-4">
+            <div class="p-4 bg-gray-50 rounded">
+                <div class="text-sm text-gray-500">RSI (14)</div>
+                <div class="text-xl font-semibold" id="rsi-value">-</div>
+            </div>
+            <div class="p-4 bg-gray-50 rounded">
+                <div class="text-sm text-gray-500">MACD Signal</div>
+                <div class="text-xl font-semibold" id="macd-value">-</div>
+            </div>
+            <div class="p-4 bg-gray-50 rounded">
+                <div class="text-sm text-gray-500">SMA 20</div>
+                <div class="text-xl font-semibold" id="sma20-value">-</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const symbol = '{{ symbol }}';
+let currentPeriod = '3mo';
+
+// Load price chart
+async function loadChart(period) {
+    currentPeriod = period;
+
+    // Update button states
+    document.querySelectorAll('.period-btn').forEach(btn => {
+        const isActive = btn.dataset.period === period;
+        btn.classList.toggle('bg-blue-600', isActive);
+        btn.classList.toggle('text-white', isActive);
+        btn.classList.toggle('bg-gray-200', !isActive);
+    });
+
+    try {
+        const res = await fetch('/api/stocks/' + encodeURIComponent(symbol) + '/chart?period=' + encodeURIComponent(period));
+        const data = await res.json();
+
+        const trace = {
+            x: data.dates,
+            open: data.open,
+            high: data.high,
+            low: data.low,
+            close: data.close,
+            type: 'candlestick',
+            increasing: {line: {color: '#10b981'}},
+            decreasing: {line: {color: '#ef4444'}}
+        };
+
+        const layout = {
+            title: '',
+            xaxis: {
+                rangeslider: {visible: false},
+                type: 'date'
+            },
+            yaxis: {
+                title: 'Price (Rp)',
+                autorange: true
+            },
+            margin: {t: 20, b: 40, l: 60, r: 20}
+        };
+
+        Plotly.newPlot('price-chart', [trace], layout, {responsive: true});
+    } catch (e) {
+        const chartEl = document.getElementById('price-chart');
+        chartEl.textContent = 'Error loading chart';
+        console.error('Chart error:', e);
+    }
+}
+
+// Load sentiment analysis
+async function loadSentiment() {
+    const container = document.getElementById('sentiment-content');
+    try {
+        const res = await fetch('/api/sentiment/' + encodeURIComponent(symbol));
+        const data = await res.json();
+
+        // Clear container
+        while (container.firstChild) {
+            container.removeChild(container.firstChild);
+        }
+
+        if (!data.sentiment || data.article_count === 0) {
+            const p = document.createElement('p');
+            p.className = 'text-gray-500';
+            p.textContent = 'No recent news found for sentiment analysis.';
+            container.appendChild(p);
+            return;
+        }
+
+        // Sentiment score display
+        const scoreDiv = document.createElement('div');
+        scoreDiv.className = 'text-center mb-4';
+
+        const scoreText = document.createElement('div');
+        scoreText.className = 'text-4xl font-bold ' + (data.avg_sentiment_score >= 0 ? 'positive' : 'negative');
+        scoreText.textContent = (data.avg_sentiment_score >= 0 ? '+' : '') + data.avg_sentiment_score.toFixed(2);
+        scoreDiv.appendChild(scoreText);
+
+        const labelText = document.createElement('div');
+        labelText.className = 'text-lg ' + (data.overall_sentiment === 'BULLISH' ? 'text-green-600' : data.overall_sentiment === 'BEARISH' ? 'text-red-600' : 'text-gray-600');
+        labelText.textContent = data.overall_sentiment;
+        scoreDiv.appendChild(labelText);
+
+        container.appendChild(scoreDiv);
+
+        // Stats
+        const statsDiv = document.createElement('div');
+        statsDiv.className = 'grid grid-cols-2 gap-4 text-sm';
+
+        const articlesDiv = document.createElement('div');
+        articlesDiv.className = 'text-center p-2 bg-gray-50 rounded';
+        const articlesLabel = document.createElement('div');
+        articlesLabel.className = 'text-gray-500';
+        articlesLabel.textContent = 'Articles';
+        const articlesValue = document.createElement('div');
+        articlesValue.className = 'font-semibold';
+        articlesValue.textContent = data.article_count;
+        articlesDiv.appendChild(articlesLabel);
+        articlesDiv.appendChild(articlesValue);
+
+        const confidenceDiv = document.createElement('div');
+        confidenceDiv.className = 'text-center p-2 bg-gray-50 rounded';
+        const confidenceLabel = document.createElement('div');
+        confidenceLabel.className = 'text-gray-500';
+        confidenceLabel.textContent = 'Confidence';
+        const confidenceValue = document.createElement('div');
+        confidenceValue.className = 'font-semibold';
+        confidenceValue.textContent = (data.confidence * 100).toFixed(0) + '%';
+        confidenceDiv.appendChild(confidenceLabel);
+        confidenceDiv.appendChild(confidenceValue);
+
+        statsDiv.appendChild(articlesDiv);
+        statsDiv.appendChild(confidenceDiv);
+        container.appendChild(statsDiv);
+
+    } catch (e) {
+        while (container.firstChild) {
+            container.removeChild(container.firstChild);
+        }
+        const errorP = document.createElement('p');
+        errorP.className = 'text-red-500';
+        errorP.textContent = 'Error loading sentiment analysis';
+        container.appendChild(errorP);
+        console.error('Sentiment error:', e);
+    }
+}
+
+// Load AI prediction
+async function loadPrediction() {
+    const container = document.getElementById('prediction-content');
+    try {
+        const res = await fetch('/api/predict/' + encodeURIComponent(symbol));
+        const data = await res.json();
+
+        // Clear container
+        while (container.firstChild) {
+            container.removeChild(container.firstChild);
+        }
+
+        if (!data.prediction) {
+            const p = document.createElement('p');
+            p.className = 'text-gray-500';
+            p.textContent = data.message || 'Prediction unavailable';
+            container.appendChild(p);
+            return;
+        }
+
+        const pred = data.prediction;
+
+        // Direction display
+        const dirDiv = document.createElement('div');
+        dirDiv.className = 'text-center mb-4';
+
+        const dirText = document.createElement('div');
+        dirText.className = 'text-3xl font-bold ' + (pred.direction === 'UP' ? 'positive' : 'negative');
+        dirText.textContent = pred.direction === 'UP' ? '↑ BULLISH' : '↓ BEARISH';
+        dirDiv.appendChild(dirText);
+
+        const confText = document.createElement('div');
+        confText.className = 'text-sm text-gray-500';
+        confText.textContent = 'Confidence: ' + (pred.confidence * 100).toFixed(0) + '%';
+        dirDiv.appendChild(confText);
+
+        container.appendChild(dirDiv);
+
+        // Model weights
+        if (pred.model_weights) {
+            const weightsDiv = document.createElement('div');
+            weightsDiv.className = 'text-xs text-gray-400 text-center';
+            weightsDiv.textContent = 'XGBoost: ' + (pred.model_weights.xgboost * 100) + '% | LSTM: ' + (pred.model_weights.lstm * 100) + '% | Sentiment: ' + (pred.model_weights.sentiment * 100) + '%';
+            container.appendChild(weightsDiv);
+        }
+
+    } catch (e) {
+        while (container.firstChild) {
+            container.removeChild(container.firstChild);
+        }
+        const errorP = document.createElement('p');
+        errorP.className = 'text-gray-500';
+        errorP.textContent = 'Prediction models not available';
+        container.appendChild(errorP);
+        console.error('Prediction error:', e);
+    }
+}
+
+// Period button handlers
+document.querySelectorAll('.period-btn').forEach(btn => {
+    btn.addEventListener('click', () => loadChart(btn.dataset.period));
+});
+
+// Export PDF handler - generates JSON report for download
+document.getElementById('btn-export').addEventListener('click', async () => {
+    try {
+        // Fetch report data
+        const res = await fetch('/api/export/' + encodeURIComponent(symbol));
+        const data = await res.json();
+
+        // Create and download JSON report
+        const reportContent = JSON.stringify(data, null, 2);
+        const blob = new Blob([reportContent], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = symbol + '_analysis_report.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        // Also show print dialog for PDF
+        if (confirm('Report downloaded as JSON. Would you like to print the current page as PDF?')) {
+            window.print();
+        }
+    } catch (e) {
+        console.error('Export error:', e);
+        alert('Error generating report. Please try again.');
+    }
+});
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    loadChart(currentPeriod);
+    loadSentiment();
+    loadPrediction();
+});
+</script>
+{% endblock %}

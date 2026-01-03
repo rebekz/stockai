@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+
+{% block title %}Portfolio - StockAI{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold">My Portfolio</h1>
+        <button id="btn-refresh" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition">
+            Refresh
+        </button>
+    </div>
+
+    <!-- Portfolio Summary -->
+    <div class="bg-gradient-to-r from-blue-600 to-blue-800 rounded-lg shadow-xl p-6 text-white mb-6">
+        <div class="grid md:grid-cols-4 gap-4">
+            <div>
+                <div class="text-blue-200 text-sm">Total Value</div>
+                <div class="text-2xl font-bold" id="total-value">
+                    {{ "Rp {:,.0f}".format(portfolio.summary.total_value) if portfolio.summary else '-' }}
+                </div>
+            </div>
+            <div>
+                <div class="text-blue-200 text-sm">Total Cost</div>
+                <div class="text-xl" id="total-cost">
+                    {{ "Rp {:,.0f}".format(portfolio.summary.total_cost) if portfolio.summary else '-' }}
+                </div>
+            </div>
+            <div>
+                <div class="text-blue-200 text-sm">Total P&L</div>
+                <div class="text-xl font-semibold" id="total-pnl">
+                    {% if portfolio.summary and portfolio.summary.total_pnl is defined %}
+                        <span class="{{ 'text-green-300' if portfolio.summary.total_pnl >= 0 else 'text-red-300' }}">
+                            {{ "Rp {:+,.0f}".format(portfolio.summary.total_pnl) }}
+                        </span>
+                    {% else %}
+                        -
+                    {% endif %}
+                </div>
+            </div>
+            <div>
+                <div class="text-blue-200 text-sm">Return</div>
+                <div class="text-xl font-semibold" id="total-return">
+                    {% if portfolio.summary and portfolio.summary.total_return_pct is defined %}
+                        <span class="{{ 'text-green-300' if portfolio.summary.total_return_pct >= 0 else 'text-red-300' }}">
+                            {{ "{:+.2f}%".format(portfolio.summary.total_return_pct) }}
+                        </span>
+                    {% else %}
+                        -
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Holdings Table -->
+    <div class="bg-white rounded-lg shadow-md overflow-hidden mb-6">
+        <div class="px-6 py-4 border-b">
+            <h2 class="text-xl font-bold">Holdings</h2>
+        </div>
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Symbol</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Shares</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Avg Cost</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Current</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Value</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">P&L</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Return</th>
+                </tr>
+            </thead>
+            <tbody id="holdings-body" class="divide-y divide-gray-200">
+                {% if portfolio.positions %}
+                    {% for pos in portfolio.positions %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <a href="/analyze/{{ pos.symbol }}" class="font-medium text-blue-600 hover:underline">
+                                {{ pos.symbol }}
+                            </a>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right">
+                            {{ "{:,.0f}".format(pos.shares) }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right">
+                            {{ "Rp {:,.0f}".format(pos.avg_cost) }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right">
+                            {{ "Rp {:,.0f}".format(pos.current_price) if pos.current_price else '-' }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right">
+                            {{ "Rp {:,.0f}".format(pos.market_value) if pos.market_value else '-' }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right">
+                            {% if pos.unrealized_pnl is defined %}
+                                <span class="{{ 'positive' if pos.unrealized_pnl >= 0 else 'negative' }}">
+                                    {{ "Rp {:+,.0f}".format(pos.unrealized_pnl) }}
+                                </span>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right">
+                            {% if pos.return_pct is defined %}
+                                <span class="{{ 'positive' if pos.return_pct >= 0 else 'negative' }}">
+                                    {{ "{:+.2f}%".format(pos.return_pct) }}
+                                </span>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="7" class="px-6 py-8 text-center text-gray-500">
+                            No positions in portfolio. Use CLI to add transactions.
+                        </td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Analytics Section -->
+    <div class="grid md:grid-cols-2 gap-6">
+        <!-- Allocation Chart -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-bold mb-4">Allocation</h2>
+            <div id="allocation-chart" style="height: 300px;">
+                <div class="flex items-center justify-center h-full text-gray-500">
+                    {% if portfolio.positions %}
+                        Loading chart...
+                    {% else %}
+                        No data available
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Insights -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-bold mb-4">AI Insights</h2>
+            <div id="insights-content">
+                <div class="text-center py-4">
+                    <div class="loader mx-auto"></div>
+                    <p class="mt-2 text-gray-500">Generating insights...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Load allocation chart
+async function loadAllocationChart() {
+    {% if portfolio.positions and portfolio.positions | length > 0 %}
+    const positions = {{ portfolio.positions | tojson | safe }};
+
+    if (positions && positions.length > 0) {
+        const data = [{
+            values: positions.map(p => p.market_value || 0),
+            labels: positions.map(p => p.symbol),
+            type: 'pie',
+            hole: 0.4,
+            textinfo: 'label+percent',
+            marker: {
+                colors: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899']
+            }
+        }];
+
+        const layout = {
+            showlegend: true,
+            legend: {orientation: 'h', y: -0.1},
+            margin: {t: 20, b: 40, l: 20, r: 20}
+        };
+
+        Plotly.newPlot('allocation-chart', data, layout, {responsive: true});
+    }
+    {% endif %}
+}
+
+// Load AI insights
+async function loadInsights() {
+    const container = document.getElementById('insights-content');
+    try {
+        const res = await fetch('/api/portfolio/analytics');
+        const data = await res.json();
+
+        // Clear container
+        while (container.firstChild) {
+            container.removeChild(container.firstChild);
+        }
+
+        if (data.insights && data.insights.length > 0) {
+            const ul = document.createElement('ul');
+            ul.className = 'space-y-2';
+
+            data.insights.forEach(insight => {
+                const li = document.createElement('li');
+                li.className = 'flex items-start';
+
+                const bullet = document.createElement('span');
+                bullet.className = 'text-blue-600 mr-2';
+                bullet.textContent = '•';
+
+                const text = document.createElement('span');
+                text.className = 'text-gray-700';
+                text.textContent = insight;
+
+                li.appendChild(bullet);
+                li.appendChild(text);
+                ul.appendChild(li);
+            });
+
+            container.appendChild(ul);
+        } else {
+            const p = document.createElement('p');
+            p.className = 'text-gray-500';
+            p.textContent = 'Add positions to get AI-powered insights.';
+            container.appendChild(p);
+        }
+    } catch (e) {
+        while (container.firstChild) {
+            container.removeChild(container.firstChild);
+        }
+        const p = document.createElement('p');
+        p.className = 'text-gray-500';
+        p.textContent = 'Unable to load insights.';
+        container.appendChild(p);
+        console.error('Insights error:', e);
+    }
+}
+
+// Refresh handler
+document.getElementById('btn-refresh').addEventListener('click', () => {
+    window.location.reload();
+});
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    loadAllocationChart();
+    loadInsights();
+});
+</script>
+{% endblock %}
