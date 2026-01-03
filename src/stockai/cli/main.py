@@ -2442,5 +2442,212 @@ def web(
     )
 
 
+# Automation subcommand group
+auto_app = typer.Typer(help="Automated trading system")
+app.add_typer(auto_app, name="auto")
+
+
+@auto_app.command("start")
+def auto_start(
+    capital: int = typer.Argument(..., help="Investment capital in Rupiah"),
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index to scan (IDX30, LQ45)"),
+    holdings: str = typer.Option(None, "--holdings", "-h", help="Current holdings (comma-separated)"),
+    telegram_token: str = typer.Option(None, "--telegram-token", envvar="STOCKAI_TELEGRAM_TOKEN", help="Telegram bot token"),
+    telegram_chat: str = typer.Option(None, "--telegram-chat", envvar="STOCKAI_TELEGRAM_CHAT", help="Telegram chat ID"),
+    output_dir: str = typer.Option(None, "--output", "-o", help="Output directory for reports"),
+) -> None:
+    """Start automated trading scheduler.
+
+    Runs continuously with scheduled tasks:
+    - 8:30 AM: Morning scan & daily recommendations
+    - 9:15 AM: Post-market-open check
+    - 12:00 PM: Mid-day review
+    - 3:45 PM: Pre-close signals
+    - 4:15 PM: End of day summary
+
+    Examples:
+        stockai auto start 10000000
+        stockai auto start 50000000 --holdings "BBRI,TLKM,BBCA"
+        stockai auto start 10000000 --telegram-token "BOT_TOKEN" --telegram-chat "CHAT_ID"
+    """
+    import asyncio
+    from stockai.automation.runner import run_automated_trading
+
+    holdings_list = [h.strip().upper() for h in holdings.split(",")] if holdings else []
+
+    console.print(
+        Panel(
+            f"[bold]Starting Automated Trading[/bold]\n\n"
+            f"💰 Capital: Rp {capital:,}\n"
+            f"📊 Index: {index}\n"
+            f"📁 Holdings: {', '.join(holdings_list) if holdings_list else 'None'}\n"
+            f"📱 Telegram: {'Enabled' if telegram_token else 'Disabled'}\n\n"
+            "[dim]Press Ctrl+C to stop[/dim]",
+            title="🤖 StockAI Automation",
+            border_style="green",
+        )
+    )
+
+    try:
+        asyncio.run(
+            run_automated_trading(
+                capital=capital,
+                index=index,
+                holdings=holdings_list,
+                telegram_token=telegram_token,
+                telegram_chat_id=telegram_chat,
+            )
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Automation stopped by user[/yellow]")
+
+
+@auto_app.command("run")
+def auto_run(
+    task: str = typer.Argument(..., help="Task to run: scan, daily, signals, portfolio, summary"),
+    capital: int = typer.Option(10_000_000, "--capital", "-c", help="Investment capital"),
+    holdings: str = typer.Option(None, "--holdings", "-h", help="Current holdings (comma-separated)"),
+    horizon: str = typer.Option("both", "--horizon", help="Investment horizon: short, long, both"),
+    output: str = typer.Option(None, "--output", "-o", help="Save output to file"),
+) -> None:
+    """Run a single automated task.
+
+    Tasks:
+        scan      - Market scan for opportunities
+        daily     - Daily portfolio recommendations
+        signals   - Quick signals for holdings
+        portfolio - Check current portfolio
+        summary   - End of day summary
+
+    Examples:
+        stockai auto run scan
+        stockai auto run daily --capital 5000000 --horizon short
+        stockai auto run signals --holdings "BBRI,TLKM"
+        stockai auto run portfolio --holdings "BBCA,ASII,TLKM"
+    """
+    from pathlib import Path
+    from stockai.automation.runner import AutomatedTrader
+
+    holdings_list = [h.strip().upper() for h in holdings.split(",")] if holdings else []
+
+    trader = AutomatedTrader(
+        capital=capital,
+        holdings=holdings_list,
+        output_dir=output,
+    )
+
+    task_lower = task.lower()
+
+    with console.status(f"[bold blue]Running {task}...[/bold blue]"):
+        if task_lower == "scan":
+            result = trader.run_market_scan()
+        elif task_lower == "daily":
+            result = trader.run_daily_recommendations(horizon=horizon)
+        elif task_lower == "signals":
+            result = trader.run_quick_signals()
+        elif task_lower == "portfolio":
+            result = trader.run_portfolio_check()
+        elif task_lower == "summary":
+            result = trader.run_daily_summary()
+        else:
+            console.print(f"[red]Unknown task:[/red] {task}")
+            console.print("Available: scan, daily, signals, portfolio, summary")
+            raise typer.Exit(1)
+
+    # Display result
+    if result.success:
+        console.print(
+            Panel(
+                result.raw_output[:2000] + "..." if len(result.raw_output) > 2000 else result.raw_output,
+                title=f"✅ {task.title()} Complete",
+                border_style="green",
+            )
+        )
+
+        if result.recommendations:
+            console.print(f"\n[bold]Recommendations:[/bold] {len(result.recommendations)}")
+        if result.signals:
+            console.print(f"[bold]Signals:[/bold] {len(result.signals)}")
+
+        # Show saved file location
+        console.print(f"\n[dim]Report saved to: {trader.output_dir}[/dim]")
+    else:
+        console.print(
+            Panel(
+                "\n".join(result.errors) if result.errors else "Unknown error",
+                title=f"❌ {task.title()} Failed",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(1)
+
+
+@auto_app.command("test-notify")
+def auto_test_notify(
+    telegram_token: str = typer.Option(..., "--telegram-token", "-t", help="Telegram bot token"),
+    telegram_chat: str = typer.Option(..., "--telegram-chat", "-c", help="Telegram chat ID"),
+) -> None:
+    """Test notification setup.
+
+    Examples:
+        stockai auto test-notify --telegram-token "BOT_TOKEN" --telegram-chat "CHAT_ID"
+    """
+    import asyncio
+    from stockai.automation.notifier import TelegramNotifier, TradingAlert
+
+    async def test():
+        notifier = TelegramNotifier(telegram_token, telegram_chat)
+
+        console.print("[bold]Testing Telegram connection...[/bold]")
+
+        if await notifier.test_connection():
+            console.print("[green]✓ Connection successful![/green]")
+
+            alert = TradingAlert(
+                title="Test Alert",
+                message="StockAI automation is configured correctly!",
+                signal="ALERT",
+            )
+
+            if await notifier.send(alert):
+                console.print("[green]✓ Test message sent![/green]")
+            else:
+                console.print("[red]✗ Failed to send test message[/red]")
+        else:
+            console.print("[red]✗ Connection failed[/red]")
+            raise typer.Exit(1)
+
+    asyncio.run(test())
+
+
+@auto_app.command("schedule")
+def auto_schedule() -> None:
+    """Show automation schedule.
+
+    Displays the default trading schedule for IDX market hours.
+    """
+    table = Table(title="📅 StockAI Automation Schedule (Asia/Jakarta)", show_header=True)
+    table.add_column("Time", style="cyan")
+    table.add_column("Task", style="bold")
+    table.add_column("Description")
+
+    schedule = [
+        ("08:30", "Morning Scan", "Daily recommendations and market opportunities"),
+        ("09:15", "Post-Open Check", "Market scan after opening bell"),
+        ("12:00", "Mid-Day Review", "Portfolio status and position checks"),
+        ("15:45", "Pre-Close Signals", "Quick signals for holdings"),
+        ("16:15", "EOD Summary", "End of day summary and outlook"),
+    ]
+
+    for time, task, desc in schedule:
+        table.add_row(time, task, desc)
+
+    console.print(table)
+    console.print("\n[dim]Schedule runs Monday-Friday (IDX trading days)[/dim]")
+    console.print("\n[bold]Quick Start:[/bold]")
+    console.print("  stockai auto start 10000000")
+    console.print("  stockai auto start 10000000 --telegram-token TOKEN --telegram-chat CHAT_ID")
+
+
 if __name__ == "__main__":
     app()
