@@ -18,12 +18,15 @@ from stockai.web.schemas import (
     WatchlistItemCreate,
     WatchlistItemListResponse,
     WatchlistItemResponse,
+    WatchlistItemUpdate,
 )
 from stockai.web.services.watchlist import (
     add_to_watchlist,
     get_watchlist_items,
     get_watchlist_item_by_id,
+    update_watchlist_item,
     WatchlistItemExistsError,
+    WatchlistItemNotFoundError,
 )
 
 logger = logging.getLogger(__name__)
@@ -294,6 +297,61 @@ async def get_watchlist_item(item_id: int) -> WatchlistItemResponse:
     item = get_watchlist_item_by_id(item_id)
 
     if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Watchlist item with id={item_id} not found",
+        )
+
+    return WatchlistItemResponse.model_validate(item)
+
+
+@api_router.put("/watchlist/{item_id}", response_model=WatchlistItemResponse)
+async def update_watchlist_item_endpoint(
+    item_id: int,
+    update_data: WatchlistItemUpdate,
+) -> WatchlistItemResponse:
+    """Update a watchlist item's alerts and notes.
+
+    Supports partial updates - only provided fields are updated.
+    Set alert prices to 0 to clear them. Set notes to empty string to clear.
+    Returns 404 if the watchlist item is not found.
+    """
+    init_database()
+
+    # Determine what to update vs clear
+    # A value of 0 means clear the field, None means don't change
+    clear_alert_above = update_data.alert_price_above == 0
+    clear_alert_below = update_data.alert_price_below == 0
+    clear_notes = update_data.notes == ""
+
+    # Only pass non-zero values for actual updates
+    alert_above = (
+        update_data.alert_price_above
+        if update_data.alert_price_above is not None and update_data.alert_price_above > 0
+        else None
+    )
+    alert_below = (
+        update_data.alert_price_below
+        if update_data.alert_price_below is not None and update_data.alert_price_below > 0
+        else None
+    )
+    notes = (
+        update_data.notes
+        if update_data.notes is not None and update_data.notes != ""
+        else None
+    )
+
+    try:
+        item = update_watchlist_item(
+            item_id=item_id,
+            alert_price_above=alert_above,
+            alert_price_below=alert_below,
+            notes=notes,
+            clear_alert_above=clear_alert_above,
+            clear_alert_below=clear_alert_below,
+            clear_notes=clear_notes,
+        )
+    except WatchlistItemNotFoundError:
         raise HTTPException(
             status_code=404,
             detail=f"Watchlist item with id={item_id} not found",
