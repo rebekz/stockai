@@ -154,3 +154,6 @@ secrets/
 *.pem
 *.key
 credentials.json
+
+# Auto Claude data directory
+.auto-claude/

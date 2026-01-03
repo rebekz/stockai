@@ -270,22 +270,36 @@ class YahooFinanceSource:
         info = self.get_stock_info(symbol)
         return info is not None and info.get("current_price") is not None
 
-    def search_stocks(self, query: str) -> list[dict[str, str]]:
+    def search_stocks(self, query: str, limit: int = 10) -> list[dict[str, str]]:
         """Search for stocks by name or symbol.
 
-        Note: Yahoo Finance search is limited. This is a basic implementation.
+        Uses local IDX stock database for fast fuzzy search,
+        with fallback to Yahoo Finance for unlisted stocks.
 
         Args:
             query: Search query
+            limit: Maximum results
 
         Returns:
             List of matching stocks
         """
-        # Yahoo Finance doesn't have a great search API
-        # This is a placeholder - in production, you'd use IDX's own API
-        # or maintain a local database of stock listings
+        from stockai.data.listings import search_stocks as local_search
+
+        # First: Try local database (fast, fuzzy search)
+        local_results = local_search(query, limit=limit)
+        if local_results:
+            return [
+                {
+                    "symbol": r["symbol"],
+                    "name": r["name"],
+                    "sector": r.get("sector", ""),
+                    "score": r.get("score", 1.0),
+                }
+                for r in local_results
+            ]
+
+        # Fallback: Try Yahoo Finance direct lookup
         try:
-            # Try direct symbol lookup
             info = self.get_stock_info(query)
             if info:
                 return [
@@ -293,11 +307,13 @@ class YahooFinanceSource:
                         "symbol": info["symbol"],
                         "name": info["name"],
                         "sector": info.get("sector", ""),
+                        "score": 1.0,
                     }
                 ]
-            return []
-        except Exception:
-            return []
+        except Exception as e:
+            logger.debug(f"Yahoo search fallback failed: {e}")
+
+        return []
 
 
 # Convenience functions

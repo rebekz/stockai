@@ -3,7 +3,7 @@
 Fetches news from multiple sources:
 1. Google News RSS feeds
 2. Yahoo Finance news
-3. Indonesian financial news sites (mock/placeholder)
+3. Indonesian financial news sites via Firecrawl (Kontan, Bisnis, CNBC Indonesia, Detik Finance)
 """
 
 import logging
@@ -15,9 +15,36 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 
+from stockai.config import get_settings
 from stockai.core.sentiment.models import NewsArticle
 
 logger = logging.getLogger(__name__)
+
+# Lazy import Firecrawl
+_firecrawl_client = None
+
+
+def _get_firecrawl_client():
+    """Lazy load Firecrawl client."""
+    global _firecrawl_client
+    if _firecrawl_client is None:
+        settings = get_settings()
+        if not settings.has_firecrawl_api:
+            logger.debug("Firecrawl API key not configured")
+            return None
+
+        try:
+            from firecrawl import FirecrawlApp
+            _firecrawl_client = FirecrawlApp(api_key=settings.firecrawl_api_key)
+            logger.info("Initialized Firecrawl client")
+        except ImportError:
+            logger.warning("Firecrawl not installed, using fallback scrapers")
+            return None
+        except Exception as e:
+            logger.warning(f"Could not initialize Firecrawl: {e}")
+            return None
+
+    return _firecrawl_client
 
 
 class NewsAggregator:
@@ -30,6 +57,12 @@ class NewsAggregator:
     """
 
     GOOGLE_NEWS_RSS = "https://news.google.com/rss/search?q={query}&hl=id&gl=ID&ceid=ID:id"
+
+    # Indonesian financial news sources
+    KONTAN_SEARCH_URL = "https://www.kontan.co.id/search/?search={query}"
+    BISNIS_SEARCH_URL = "https://www.bisnis.com/index.php/search?q={query}"
+    CNBC_SEARCH_URL = "https://www.cnbcindonesia.com/search?query={query}"
+    DETIK_SEARCH_URL = "https://www.detik.com/search/searchall?query={query}&siteid=3"  # siteid=3 = finance
 
     # Indonesian stock company names for better search
     IDX_COMPANY_NAMES = {
@@ -234,6 +267,445 @@ class NewsAggregator:
 
         return articles
 
+    def fetch_kontan_news(
+        self,
+        symbol: str,
+        max_articles: int = 5,
+    ) -> list[NewsArticle]:
+        """Fetch news from Kontan.co.id.
+
+        Args:
+            symbol: Stock symbol
+            max_articles: Maximum articles to fetch
+
+        Returns:
+            List of NewsArticle
+        """
+        symbol = symbol.upper().replace(".JK", "")
+        company_name = self.IDX_COMPANY_NAMES.get(symbol, symbol)
+        query = f"{symbol} {company_name}".replace(" ", "+")
+        url = self.KONTAN_SEARCH_URL.format(query=query)
+
+        articles = []
+
+        try:
+            response = self._session.get(url, timeout=self._timeout)
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # Kontan search results structure
+            news_items = soup.select("div.isi-news-plg, div.list-news li, article.news-item")[:max_articles]
+
+            for item in news_items:
+                # Try different selectors for title/link
+                title_elem = item.select_one("a.news-title, h2 a, h3 a, a")
+                if not title_elem:
+                    continue
+
+                title = title_elem.get_text(strip=True)
+                link = title_elem.get("href", "")
+
+                # Make absolute URL
+                if link and not link.startswith("http"):
+                    link = f"https://www.kontan.co.id{link}"
+
+                # Get summary/content
+                content_elem = item.select_one("p, div.news-desc, span.desc")
+                content = content_elem.get_text(strip=True) if content_elem else title
+
+                # Get date
+                date_elem = item.select_one("span.date, time, div.date")
+                published_at = None
+                if date_elem:
+                    date_text = date_elem.get_text(strip=True)
+                    published_at = self._parse_indonesian_date(date_text)
+
+                if title and len(title) > 10:
+                    article = NewsArticle(
+                        title=title,
+                        content=content or title,
+                        source="Kontan",
+                        url=link,
+                        published_at=published_at,
+                        symbol=symbol,
+                    )
+                    articles.append(article)
+
+            logger.info(f"Fetched {len(articles)} articles from Kontan for {symbol}")
+
+        except Exception as e:
+            logger.warning(f"Error fetching Kontan news: {e}")
+
+        return articles
+
+    def fetch_bisnis_news(
+        self,
+        symbol: str,
+        max_articles: int = 5,
+    ) -> list[NewsArticle]:
+        """Fetch news from Bisnis.com.
+
+        Args:
+            symbol: Stock symbol
+            max_articles: Maximum articles to fetch
+
+        Returns:
+            List of NewsArticle
+        """
+        symbol = symbol.upper().replace(".JK", "")
+        company_name = self.IDX_COMPANY_NAMES.get(symbol, symbol)
+        query = f"{symbol} {company_name}".replace(" ", "+")
+        url = self.BISNIS_SEARCH_URL.format(query=query)
+
+        articles = []
+
+        try:
+            response = self._session.get(url, timeout=self._timeout)
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # Bisnis.com search results structure
+            news_items = soup.select("div.col-sm-8 article, div.list-news li, div.search-result-item")[:max_articles]
+
+            for item in news_items:
+                title_elem = item.select_one("h4 a, h3 a, h2 a, a.title")
+                if not title_elem:
+                    continue
+
+                title = title_elem.get_text(strip=True)
+                link = title_elem.get("href", "")
+
+                if link and not link.startswith("http"):
+                    link = f"https://www.bisnis.com{link}"
+
+                content_elem = item.select_one("p, div.description, span.lead")
+                content = content_elem.get_text(strip=True) if content_elem else title
+
+                date_elem = item.select_one("span.date, time, div.time")
+                published_at = None
+                if date_elem:
+                    date_text = date_elem.get_text(strip=True)
+                    published_at = self._parse_indonesian_date(date_text)
+
+                if title and len(title) > 10:
+                    article = NewsArticle(
+                        title=title,
+                        content=content or title,
+                        source="Bisnis.com",
+                        url=link,
+                        published_at=published_at,
+                        symbol=symbol,
+                    )
+                    articles.append(article)
+
+            logger.info(f"Fetched {len(articles)} articles from Bisnis.com for {symbol}")
+
+        except Exception as e:
+            logger.warning(f"Error fetching Bisnis.com news: {e}")
+
+        return articles
+
+    def fetch_cnbc_indonesia_news(
+        self,
+        symbol: str,
+        max_articles: int = 5,
+    ) -> list[NewsArticle]:
+        """Fetch news from CNBC Indonesia.
+
+        Args:
+            symbol: Stock symbol
+            max_articles: Maximum articles to fetch
+
+        Returns:
+            List of NewsArticle
+        """
+        symbol = symbol.upper().replace(".JK", "")
+        company_name = self.IDX_COMPANY_NAMES.get(symbol, symbol)
+        query = f"{symbol} {company_name}".replace(" ", "+")
+        url = self.CNBC_SEARCH_URL.format(query=query)
+
+        articles = []
+
+        try:
+            response = self._session.get(url, timeout=self._timeout)
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # CNBC Indonesia search results structure
+            news_items = soup.select("article, div.list li, div.media-object")[:max_articles]
+
+            for item in news_items:
+                title_elem = item.select_one("h2 a, h3 a, h4 a, a.title, a")
+                if not title_elem:
+                    continue
+
+                title = title_elem.get_text(strip=True)
+                link = title_elem.get("href", "")
+
+                if link and not link.startswith("http"):
+                    link = f"https://www.cnbcindonesia.com{link}"
+
+                content_elem = item.select_one("p, div.desc, span.description")
+                content = content_elem.get_text(strip=True) if content_elem else title
+
+                date_elem = item.select_one("span.date, time, div.date, span.time")
+                published_at = None
+                if date_elem:
+                    date_text = date_elem.get_text(strip=True)
+                    published_at = self._parse_indonesian_date(date_text)
+
+                if title and len(title) > 10:
+                    article = NewsArticle(
+                        title=title,
+                        content=content or title,
+                        source="CNBC Indonesia",
+                        url=link,
+                        published_at=published_at,
+                        symbol=symbol,
+                    )
+                    articles.append(article)
+
+            logger.info(f"Fetched {len(articles)} articles from CNBC Indonesia for {symbol}")
+
+        except Exception as e:
+            logger.warning(f"Error fetching CNBC Indonesia news: {e}")
+
+        return articles
+
+    def fetch_detik_finance_news(
+        self,
+        symbol: str,
+        max_articles: int = 5,
+    ) -> list[NewsArticle]:
+        """Fetch news from Detik Finance.
+
+        Args:
+            symbol: Stock symbol
+            max_articles: Maximum articles to fetch
+
+        Returns:
+            List of NewsArticle
+        """
+        symbol = symbol.upper().replace(".JK", "")
+        company_name = self.IDX_COMPANY_NAMES.get(symbol, symbol)
+        query = f"{symbol} {company_name} saham".replace(" ", "+")
+        url = self.DETIK_SEARCH_URL.format(query=query)
+
+        articles = []
+
+        try:
+            response = self._session.get(url, timeout=self._timeout)
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # Detik search results structure
+            news_items = soup.select("article, div.list-content__item, div.media")[:max_articles]
+
+            for item in news_items:
+                title_elem = item.select_one("h2 a, h3 a, a.media__link, a")
+                if not title_elem:
+                    continue
+
+                title = title_elem.get_text(strip=True)
+                link = title_elem.get("href", "")
+
+                content_elem = item.select_one("p, div.media__desc, span.media__summary")
+                content = content_elem.get_text(strip=True) if content_elem else title
+
+                date_elem = item.select_one("span.date, span.media__date, time")
+                published_at = None
+                if date_elem:
+                    date_text = date_elem.get_text(strip=True)
+                    published_at = self._parse_indonesian_date(date_text)
+
+                if title and len(title) > 10:
+                    article = NewsArticle(
+                        title=title,
+                        content=content or title,
+                        source="Detik Finance",
+                        url=link,
+                        published_at=published_at,
+                        symbol=symbol,
+                    )
+                    articles.append(article)
+
+            logger.info(f"Fetched {len(articles)} articles from Detik Finance for {symbol}")
+
+        except Exception as e:
+            logger.warning(f"Error fetching Detik Finance news: {e}")
+
+        return articles
+
+    def _parse_indonesian_date(self, date_str: str) -> datetime | None:
+        """Parse Indonesian date formats.
+
+        Args:
+            date_str: Date string in Indonesian format
+
+        Returns:
+            Datetime or None
+        """
+        if not date_str:
+            return None
+
+        # Clean the date string
+        date_str = date_str.strip()
+
+        # Indonesian month names
+        id_months = {
+            "januari": "01", "februari": "02", "maret": "03", "april": "04",
+            "mei": "05", "juni": "06", "juli": "07", "agustus": "08",
+            "september": "09", "oktober": "10", "november": "11", "desember": "12",
+            "jan": "01", "feb": "02", "mar": "03", "apr": "04",
+            "jun": "06", "jul": "07", "agu": "08", "ags": "08",
+            "sep": "09", "okt": "10", "nov": "11", "des": "12",
+        }
+
+        try:
+            # Handle relative dates
+            date_lower = date_str.lower()
+            if "hari ini" in date_lower or "today" in date_lower:
+                return datetime.now()
+            if "kemarin" in date_lower or "yesterday" in date_lower:
+                return datetime.now() - timedelta(days=1)
+            if "jam lalu" in date_lower or "hour ago" in date_lower:
+                match = re.search(r"(\d+)", date_str)
+                if match:
+                    hours = int(match.group(1))
+                    return datetime.now() - timedelta(hours=hours)
+            if "menit lalu" in date_lower or "minute ago" in date_lower:
+                match = re.search(r"(\d+)", date_str)
+                if match:
+                    minutes = int(match.group(1))
+                    return datetime.now() - timedelta(minutes=minutes)
+
+            # Replace Indonesian month names with numbers
+            for id_month, num in id_months.items():
+                date_str = re.sub(rf"\b{id_month}\b", num, date_str, flags=re.IGNORECASE)
+
+            # Try various date patterns
+            patterns = [
+                r"(\d{1,2})[/\-\s](\d{1,2})[/\-\s](\d{4})",  # DD/MM/YYYY
+                r"(\d{4})[/\-\s](\d{1,2})[/\-\s](\d{1,2})",  # YYYY/MM/DD
+                r"(\d{1,2})\s+(\d{2})\s+(\d{4})",  # DD MM YYYY
+            ]
+
+            for pattern in patterns:
+                match = re.search(pattern, date_str)
+                if match:
+                    groups = match.groups()
+                    if len(groups[0]) == 4:  # YYYY first
+                        year, month, day = groups
+                    else:  # DD first
+                        day, month, year = groups
+                    return datetime(int(year), int(month), int(day))
+
+            # Try standard parsing as fallback
+            return self._parse_date(date_str)
+
+        except Exception:
+            return None
+
+    def fetch_firecrawl_news(
+        self,
+        symbol: str,
+        max_articles: int = 10,
+    ) -> list[NewsArticle]:
+        """Fetch news using Firecrawl search API.
+
+        Uses Firecrawl to search Indonesian financial news sites
+        for articles about the given stock.
+
+        Args:
+            symbol: Stock symbol
+            max_articles: Maximum articles to fetch
+
+        Returns:
+            List of NewsArticle
+        """
+        client = _get_firecrawl_client()
+        if client is None:
+            logger.debug("Firecrawl not available, skipping")
+            return []
+
+        symbol = symbol.upper().replace(".JK", "")
+        company_name = self.IDX_COMPANY_NAMES.get(symbol, "")
+
+        # Build search query
+        if company_name:
+            query = f"{symbol} OR {company_name} saham Indonesia"
+        else:
+            query = f"{symbol} saham IDX Indonesia"
+
+        articles = []
+
+        try:
+            # Use Firecrawl search with Indonesian financial sites
+            search_result = client.search(
+                query=query,
+                limit=max_articles,
+                scrape_options={
+                    "formats": ["markdown"],
+                    "onlyMainContent": True,
+                },
+            )
+
+            if not search_result or "data" not in search_result:
+                return []
+
+            for item in search_result.get("data", [])[:max_articles]:
+                title = item.get("title", "")
+                url = item.get("url", "")
+                content = item.get("markdown", "") or item.get("description", "")
+
+                # Extract source from URL
+                source = "Firecrawl"
+                if "kontan.co.id" in url:
+                    source = "Kontan"
+                elif "bisnis.com" in url:
+                    source = "Bisnis.com"
+                elif "cnbcindonesia.com" in url:
+                    source = "CNBC Indonesia"
+                elif "detik.com" in url:
+                    source = "Detik Finance"
+                elif "kompas.com" in url:
+                    source = "Kompas"
+                elif "idnfinancials" in url:
+                    source = "IDN Financials"
+                elif "yahoo" in url:
+                    source = "Yahoo Finance"
+
+                # Parse published date if available
+                published_at = None
+                if item.get("publishedDate"):
+                    published_at = self._parse_date(item["publishedDate"])
+
+                # Clean content - take first 500 chars for summary
+                if content and len(content) > 500:
+                    content = content[:500] + "..."
+
+                if title and len(title) > 10:
+                    article = NewsArticle(
+                        title=title,
+                        content=content or title,
+                        source=source,
+                        url=url,
+                        published_at=published_at,
+                        symbol=symbol,
+                    )
+                    articles.append(article)
+
+            logger.info(f"Fetched {len(articles)} articles from Firecrawl for {symbol}")
+
+        except Exception as e:
+            logger.warning(f"Error fetching Firecrawl news: {e}")
+
+        return articles
+
     def fetch_all(
         self,
         symbol: str,
@@ -252,12 +724,28 @@ class NewsAggregator:
         """
         all_articles = []
 
-        # Fetch from each source
+        # Try Firecrawl first (best quality, searches all Indonesian sources)
+        firecrawl_articles = self.fetch_firecrawl_news(symbol, max_articles=max_articles)
+        all_articles.extend(firecrawl_articles)
+
+        # Supplement with RSS feeds for broader coverage
         google_articles = self.fetch_google_news(symbol, max_articles=10)
         yahoo_articles = self.fetch_yahoo_news(symbol, max_articles=5)
-
         all_articles.extend(google_articles)
         all_articles.extend(yahoo_articles)
+
+        # If Firecrawl didn't return enough, use fallback scrapers
+        if len(firecrawl_articles) < 5:
+            logger.debug("Firecrawl returned few articles, using fallback scrapers")
+            kontan_articles = self.fetch_kontan_news(symbol, max_articles=3)
+            bisnis_articles = self.fetch_bisnis_news(symbol, max_articles=3)
+            cnbc_articles = self.fetch_cnbc_indonesia_news(symbol, max_articles=3)
+            detik_articles = self.fetch_detik_finance_news(symbol, max_articles=3)
+
+            all_articles.extend(kontan_articles)
+            all_articles.extend(bisnis_articles)
+            all_articles.extend(cnbc_articles)
+            all_articles.extend(detik_articles)
 
         # Filter by date (use timezone-aware cutoff for comparison)
         from datetime import timezone

@@ -421,10 +421,22 @@ class TestNewsAggregator:
         assert len(articles) == 1
         assert articles[0].source == "Yahoo Finance"
 
+    @patch.object(NewsAggregator, 'fetch_firecrawl_news')
+    @patch.object(NewsAggregator, 'fetch_kontan_news')
+    @patch.object(NewsAggregator, 'fetch_bisnis_news')
+    @patch.object(NewsAggregator, 'fetch_cnbc_indonesia_news')
+    @patch.object(NewsAggregator, 'fetch_detik_finance_news')
     @patch.object(NewsAggregator, 'fetch_google_news')
     @patch.object(NewsAggregator, 'fetch_yahoo_news')
-    def test_fetch_all(self, mock_yahoo, mock_google):
+    def test_fetch_all(self, mock_yahoo, mock_google, mock_detik, mock_cnbc, mock_bisnis, mock_kontan, mock_firecrawl):
         """Test fetching from all sources."""
+        # Mock all scrapers to return empty (simulating unavailable sources)
+        mock_firecrawl.return_value = []
+        mock_kontan.return_value = []
+        mock_bisnis.return_value = []
+        mock_cnbc.return_value = []
+        mock_detik.return_value = []
+
         mock_google.return_value = [
             NewsArticle(
                 title="Google News 1",
@@ -452,10 +464,22 @@ class TestNewsAggregator:
         assert mock_google.called
         assert mock_yahoo.called
 
+    @patch.object(NewsAggregator, 'fetch_firecrawl_news')
+    @patch.object(NewsAggregator, 'fetch_kontan_news')
+    @patch.object(NewsAggregator, 'fetch_bisnis_news')
+    @patch.object(NewsAggregator, 'fetch_cnbc_indonesia_news')
+    @patch.object(NewsAggregator, 'fetch_detik_finance_news')
     @patch.object(NewsAggregator, 'fetch_google_news')
     @patch.object(NewsAggregator, 'fetch_yahoo_news')
-    def test_fetch_all_deduplication(self, mock_yahoo, mock_google):
+    def test_fetch_all_deduplication(self, mock_yahoo, mock_google, mock_detik, mock_cnbc, mock_bisnis, mock_kontan, mock_firecrawl):
         """Test deduplication in fetch_all."""
+        # Mock all scrapers to return empty
+        mock_firecrawl.return_value = []
+        mock_kontan.return_value = []
+        mock_bisnis.return_value = []
+        mock_cnbc.return_value = []
+        mock_detik.return_value = []
+
         # Same title from different sources
         mock_google.return_value = [
             NewsArticle(
@@ -483,10 +507,22 @@ class TestNewsAggregator:
         # Should deduplicate to 1 article
         assert len(articles) == 1
 
+    @patch.object(NewsAggregator, 'fetch_firecrawl_news')
+    @patch.object(NewsAggregator, 'fetch_kontan_news')
+    @patch.object(NewsAggregator, 'fetch_bisnis_news')
+    @patch.object(NewsAggregator, 'fetch_cnbc_indonesia_news')
+    @patch.object(NewsAggregator, 'fetch_detik_finance_news')
     @patch.object(NewsAggregator, 'fetch_google_news')
     @patch.object(NewsAggregator, 'fetch_yahoo_news')
-    def test_fetch_all_date_filter(self, mock_yahoo, mock_google):
+    def test_fetch_all_date_filter(self, mock_yahoo, mock_google, mock_detik, mock_cnbc, mock_bisnis, mock_kontan, mock_firecrawl):
         """Test date filtering in fetch_all."""
+        # Mock all scrapers to return empty
+        mock_firecrawl.return_value = []
+        mock_kontan.return_value = []
+        mock_bisnis.return_value = []
+        mock_cnbc.return_value = []
+        mock_detik.return_value = []
+
         old_date = datetime.utcnow() - timedelta(days=30)
 
         mock_google.return_value = [

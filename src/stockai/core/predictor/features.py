@@ -13,6 +13,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from stockai.data.sectors import get_sector_relative_strength, get_stock_sector
+
 logger = logging.getLogger(__name__)
 
 # Feature groups
@@ -83,12 +85,14 @@ class FeatureEngineer:
         self,
         df: pd.DataFrame,
         ihsg_df: pd.DataFrame | None = None,
+        symbol: str | None = None,
     ) -> pd.DataFrame:
         """Generate all features from OHLCV data.
 
         Args:
             df: DataFrame with columns: open, high, low, close, volume
             ihsg_df: Optional IHSG index data for market features
+            symbol: Optional stock symbol for sector-based features
 
         Returns:
             DataFrame with all generated features
@@ -111,7 +115,7 @@ class FeatureEngineer:
         features = self._add_volume_features(features)
 
         if self.include_market_features and ihsg_df is not None:
-            features = self._add_market_features(features, ihsg_df)
+            features = self._add_market_features(features, ihsg_df, symbol)
         else:
             # Add placeholder market features
             for feat in MARKET_FEATURES:
@@ -293,8 +297,15 @@ class FeatureEngineer:
         self,
         df: pd.DataFrame,
         ihsg_df: pd.DataFrame,
+        symbol: str | None = None,
     ) -> pd.DataFrame:
-        """Add market-level features."""
+        """Add market-level features.
+
+        Args:
+            df: Stock OHLCV DataFrame
+            ihsg_df: IHSG index DataFrame
+            symbol: Stock symbol for sector-based features
+        """
         # Ensure IHSG data is aligned
         ihsg_close = ihsg_df["close"].reindex(df.index, method="ffill")
         stock_returns = df["close"].pct_change()
@@ -309,8 +320,19 @@ class FeatureEngineer:
         variance = ihsg_returns.rolling(20).var()
         df["ihsg_beta_20d"] = covariance / variance.replace(0, 1)
 
-        # Relative strength (placeholder - needs sector data)
-        df["sector_relative_strength"] = 0.0
+        # Sector Relative Strength (real implementation)
+        if symbol:
+            try:
+                sector_rs = get_sector_relative_strength(df, symbol, period=20)
+                df["sector_relative_strength"] = sector_rs
+                sector = get_stock_sector(symbol)
+                if sector:
+                    logger.debug(f"Calculated sector RS for {symbol} ({sector})")
+            except Exception as e:
+                logger.warning(f"Could not calculate sector RS for {symbol}: {e}")
+                df["sector_relative_strength"] = 0.0
+        else:
+            df["sector_relative_strength"] = 0.0
 
         # Market regime (simplified: based on IHSG trend)
         ihsg_sma50 = ihsg_close.rolling(50).mean()
