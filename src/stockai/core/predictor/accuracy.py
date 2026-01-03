@@ -634,3 +634,295 @@ class PredictionAccuracyTracker:
                 return _execute(session)
         else:
             return _execute(self._session)
+
+    def get_accuracy_by_model(self) -> dict[str, Any]:
+        """Analyze which model components correlate with correct predictions.
+
+        Examines the relationship between individual model component probabilities
+        (XGBoost, LSTM, sentiment) and prediction correctness to identify which
+        components are most predictive.
+
+        Returns:
+            Dictionary with model-specific accuracy analysis including:
+            - xgboost: Accuracy metrics binned by xgboost_prob ranges
+            - lstm: Accuracy metrics binned by lstm_prob ranges
+            - sentiment: Accuracy metrics binned by sentiment_score ranges
+            - insights: List of observations about model performance
+            - correlation_summary: Overall correlation indicators for each component
+        """
+
+        def _execute(session: Session) -> dict:
+            # Get all evaluated predictions with model component data
+            predictions = (
+                session.query(Prediction)
+                .filter(Prediction.is_correct.isnot(None))
+                .all()
+            )
+
+            # Handle zero predictions gracefully
+            if not predictions:
+                return {
+                    "xgboost": {"bins": [], "total_with_data": 0},
+                    "lstm": {"bins": [], "total_with_data": 0},
+                    "sentiment": {"bins": [], "total_with_data": 0},
+                    "correlation_summary": {
+                        "xgboost": {"has_correlation": None, "direction": None},
+                        "lstm": {"has_correlation": None, "direction": None},
+                        "sentiment": {"has_correlation": None, "direction": None},
+                    },
+                    "insights": [],
+                    "message": "No evaluated predictions found",
+                }
+
+            # Define probability bins for analysis
+            # For xgboost_prob and lstm_prob: 0-1 scale
+            prob_bins = [
+                {"label": "Very Low (0-0.2)", "min": 0.0, "max": 0.2},
+                {"label": "Low (0.2-0.4)", "min": 0.2, "max": 0.4},
+                {"label": "Medium (0.4-0.6)", "min": 0.4, "max": 0.6},
+                {"label": "High (0.6-0.8)", "min": 0.6, "max": 0.8},
+                {"label": "Very High (0.8-1.0)", "min": 0.8, "max": 1.0},
+            ]
+
+            # For sentiment_score: -1 to 1 scale
+            sentiment_bins = [
+                {"label": "Very Negative (-1.0 to -0.6)", "min": -1.0, "max": -0.6},
+                {"label": "Negative (-0.6 to -0.2)", "min": -0.6, "max": -0.2},
+                {"label": "Neutral (-0.2 to 0.2)", "min": -0.2, "max": 0.2},
+                {"label": "Positive (0.2 to 0.6)", "min": 0.2, "max": 0.6},
+                {"label": "Very Positive (0.6 to 1.0)", "min": 0.6, "max": 1.0},
+            ]
+
+            def analyze_component(
+                predictions: list,
+                attr_name: str,
+                bins: list[dict],
+            ) -> dict:
+                """Analyze accuracy by component probability bins."""
+                # Filter predictions that have this component's data
+                preds_with_data = [
+                    p for p in predictions
+                    if getattr(p, attr_name) is not None
+                ]
+
+                if not preds_with_data:
+                    return {
+                        "bins": [],
+                        "total_with_data": 0,
+                        "overall_accuracy": 0.0,
+                    }
+
+                bin_results = []
+                for bin_def in bins:
+                    # Get predictions in this bin
+                    bin_preds = [
+                        p for p in preds_with_data
+                        if bin_def["min"] <= getattr(p, attr_name) < bin_def["max"]
+                        or (bin_def["max"] == 1.0 and getattr(p, attr_name) == 1.0)
+                        or (bin_def["max"] == -0.6 and getattr(p, attr_name) == -1.0)
+                    ]
+
+                    total = len(bin_preds)
+                    correct = sum(1 for p in bin_preds if p.is_correct)
+                    accuracy = round((correct / total * 100), 2) if total > 0 else 0.0
+
+                    bin_results.append({
+                        "label": bin_def["label"],
+                        "min": bin_def["min"],
+                        "max": bin_def["max"],
+                        "total": total,
+                        "correct": correct,
+                        "accuracy_rate": accuracy,
+                    })
+
+                # Calculate overall accuracy for this component
+                total_with_data = len(preds_with_data)
+                correct_with_data = sum(1 for p in preds_with_data if p.is_correct)
+                overall_accuracy = round(
+                    (correct_with_data / total_with_data * 100), 2
+                ) if total_with_data > 0 else 0.0
+
+                return {
+                    "bins": bin_results,
+                    "total_with_data": total_with_data,
+                    "overall_accuracy": overall_accuracy,
+                }
+
+            # Analyze each model component
+            xgboost_analysis = analyze_component(predictions, "xgboost_prob", prob_bins)
+            lstm_analysis = analyze_component(predictions, "lstm_prob", prob_bins)
+            sentiment_analysis = analyze_component(
+                predictions, "sentiment_score", sentiment_bins
+            )
+
+            def calculate_correlation_indicator(analysis: dict) -> dict:
+                """Calculate a simple correlation indicator.
+
+                Compares accuracy in high vs low probability bins to determine
+                if higher component values correlate with correct predictions.
+                """
+                bins = analysis.get("bins", [])
+                if not bins or analysis.get("total_with_data", 0) < 5:
+                    return {"has_correlation": None, "direction": None}
+
+                # Get accuracy for low bins (first 2) vs high bins (last 2)
+                low_bins = [b for b in bins[:2] if b["total"] > 0]
+                high_bins = [b for b in bins[-2:] if b["total"] > 0]
+
+                if not low_bins or not high_bins:
+                    return {"has_correlation": None, "direction": None}
+
+                # Weighted average accuracy for low and high
+                low_total = sum(b["total"] for b in low_bins)
+                low_correct = sum(b["correct"] for b in low_bins)
+                low_accuracy = (low_correct / low_total * 100) if low_total > 0 else 0
+
+                high_total = sum(b["total"] for b in high_bins)
+                high_correct = sum(b["correct"] for b in high_bins)
+                high_accuracy = (high_correct / high_total * 100) if high_total > 0 else 0
+
+                # Determine correlation direction and strength
+                diff = high_accuracy - low_accuracy
+                if abs(diff) < 5:  # Less than 5% difference is weak
+                    return {
+                        "has_correlation": False,
+                        "direction": "none",
+                        "low_accuracy": round(low_accuracy, 2),
+                        "high_accuracy": round(high_accuracy, 2),
+                        "difference": round(diff, 2),
+                    }
+                elif diff > 0:
+                    return {
+                        "has_correlation": True,
+                        "direction": "positive",
+                        "low_accuracy": round(low_accuracy, 2),
+                        "high_accuracy": round(high_accuracy, 2),
+                        "difference": round(diff, 2),
+                    }
+                else:
+                    return {
+                        "has_correlation": True,
+                        "direction": "negative",
+                        "low_accuracy": round(low_accuracy, 2),
+                        "high_accuracy": round(high_accuracy, 2),
+                        "difference": round(diff, 2),
+                    }
+
+            # Calculate correlation indicators
+            xgboost_corr = calculate_correlation_indicator(xgboost_analysis)
+            lstm_corr = calculate_correlation_indicator(lstm_analysis)
+            sentiment_corr = calculate_correlation_indicator(sentiment_analysis)
+
+            # Generate insights based on analysis
+            insights = []
+
+            # XGBoost insights
+            if xgboost_corr.get("has_correlation") is True:
+                if xgboost_corr["direction"] == "positive":
+                    insights.append(
+                        f"XGBoost shows positive correlation: higher probabilities "
+                        f"correlate with more correct predictions "
+                        f"({xgboost_corr['high_accuracy']:.1f}% vs {xgboost_corr['low_accuracy']:.1f}%)"
+                    )
+                else:
+                    insights.append(
+                        f"XGBoost shows unexpected negative correlation: lower probabilities "
+                        f"correlate with more correct predictions "
+                        f"({xgboost_corr['low_accuracy']:.1f}% vs {xgboost_corr['high_accuracy']:.1f}%)"
+                    )
+            elif xgboost_corr.get("has_correlation") is False:
+                insights.append(
+                    "XGBoost probability shows weak correlation with prediction accuracy"
+                )
+
+            # LSTM insights
+            if lstm_corr.get("has_correlation") is True:
+                if lstm_corr["direction"] == "positive":
+                    insights.append(
+                        f"LSTM shows positive correlation: higher probabilities "
+                        f"correlate with more correct predictions "
+                        f"({lstm_corr['high_accuracy']:.1f}% vs {lstm_corr['low_accuracy']:.1f}%)"
+                    )
+                else:
+                    insights.append(
+                        f"LSTM shows unexpected negative correlation: lower probabilities "
+                        f"correlate with more correct predictions "
+                        f"({lstm_corr['low_accuracy']:.1f}% vs {lstm_corr['high_accuracy']:.1f}%)"
+                    )
+            elif lstm_corr.get("has_correlation") is False:
+                insights.append(
+                    "LSTM probability shows weak correlation with prediction accuracy"
+                )
+
+            # Sentiment insights
+            if sentiment_corr.get("has_correlation") is True:
+                if sentiment_corr["direction"] == "positive":
+                    insights.append(
+                        f"Sentiment score shows positive correlation: higher scores "
+                        f"correlate with more correct predictions "
+                        f"({sentiment_corr['high_accuracy']:.1f}% vs {sentiment_corr['low_accuracy']:.1f}%)"
+                    )
+                else:
+                    insights.append(
+                        f"Sentiment score shows negative correlation: lower scores "
+                        f"correlate with more correct predictions "
+                        f"({sentiment_corr['low_accuracy']:.1f}% vs {sentiment_corr['high_accuracy']:.1f}%)"
+                    )
+            elif sentiment_corr.get("has_correlation") is False:
+                insights.append(
+                    "Sentiment score shows weak correlation with prediction accuracy"
+                )
+
+            # Find best performing component
+            components_with_corr = []
+            if xgboost_corr.get("has_correlation") is True:
+                components_with_corr.append(
+                    ("XGBoost", abs(xgboost_corr.get("difference", 0)))
+                )
+            if lstm_corr.get("has_correlation") is True:
+                components_with_corr.append(
+                    ("LSTM", abs(lstm_corr.get("difference", 0)))
+                )
+            if sentiment_corr.get("has_correlation") is True:
+                components_with_corr.append(
+                    ("Sentiment", abs(sentiment_corr.get("difference", 0)))
+                )
+
+            if components_with_corr:
+                best_component = max(components_with_corr, key=lambda x: x[1])
+                insights.append(
+                    f"Strongest predictor: {best_component[0]} "
+                    f"(accuracy difference: {best_component[1]:.1f}%)"
+                )
+
+            # Check for high-confidence bins
+            for name, analysis in [
+                ("XGBoost", xgboost_analysis),
+                ("LSTM", lstm_analysis),
+            ]:
+                high_bins = [b for b in analysis.get("bins", [])[-2:] if b["total"] >= 3]
+                for bin_data in high_bins:
+                    if bin_data["accuracy_rate"] >= 70:
+                        insights.append(
+                            f"{name} {bin_data['label']}: {bin_data['accuracy_rate']:.1f}% accuracy "
+                            f"({bin_data['correct']}/{bin_data['total']} correct)"
+                        )
+
+            return {
+                "xgboost": xgboost_analysis,
+                "lstm": lstm_analysis,
+                "sentiment": sentiment_analysis,
+                "correlation_summary": {
+                    "xgboost": xgboost_corr,
+                    "lstm": lstm_corr,
+                    "sentiment": sentiment_corr,
+                },
+                "insights": insights,
+                "total_evaluated_predictions": len(predictions),
+            }
+
+        if self._use_context_manager:
+            with session_scope() as session:
+                return _execute(session)
+        else:
+            return _execute(self._session)
