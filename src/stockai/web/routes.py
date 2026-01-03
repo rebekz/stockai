@@ -185,15 +185,19 @@ async def get_sentiment(
 
 
 @api_router.get("/predict/{symbol}")
+@async_cached("prediction")
 async def get_prediction(symbol: str) -> dict:
     """Get stock prediction."""
+    # Normalize symbol for consistent cache keys
+    symbol = symbol.upper()
+
     from stockai.config import get_settings
     from stockai.core.predictor import EnsemblePredictor
 
     settings = get_settings()
     yahoo = YahooFinanceSource()
 
-    df = yahoo.get_price_history(symbol.upper(), period="6mo")
+    df = yahoo.get_price_history(symbol, period="6mo")
     if df.empty or len(df) < 50:
         raise HTTPException(
             status_code=400,
@@ -209,16 +213,16 @@ async def get_prediction(symbol: str) -> dict:
     loaded = ensemble.load_models()
     if not any(loaded.values()):
         return {
-            "symbol": symbol.upper(),
+            "symbol": symbol,
             "prediction": None,
             "message": "No trained models available",
         }
 
     # Get prediction with sentiment
-    result = ensemble.predict_with_sentiment(df, symbol.upper())
+    result = ensemble.predict_with_sentiment(df, symbol)
 
     return {
-        "symbol": symbol.upper(),
+        "symbol": symbol,
         "prediction": result,
     }
 
