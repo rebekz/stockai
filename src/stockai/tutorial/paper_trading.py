@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 import pytz
 
-from stockai.core.logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 TIMEZONE = pytz.timezone("Asia/Jakarta")
 

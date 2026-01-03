@@ -12,9 +12,9 @@ import pytz
 
 from stockai.agents import TradingOrchestrator, create_trading_orchestrator
 from stockai.automation.notifier import Notifier, TradingAlert
-from stockai.core.logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 @dataclass

@@ -3225,5 +3225,542 @@ def paper_reset(
     console.print(f"[green]Paper account reset dengan modal Rp {capital:,}[/green]")
 
 
+# =============================================================================
+# SCORING COMMANDS - Multi-factor stock scoring
+# =============================================================================
+
+score_app = typer.Typer(help="Multi-factor stock scoring system")
+app.add_typer(score_app, name="score")
+
+
+@score_app.command("stock")
+def score_stock(
+    symbol: str = typer.Argument(..., help="Stock symbol (e.g., BBCA)"),
+) -> None:
+    """Calculate multi-factor score for a stock.
+
+    Uses hedge fund-style scoring: Value (25%), Quality (30%),
+    Momentum (25%), Volatility (20%).
+
+    Examples:
+        stockai score stock BBCA
+        stockai score stock TLKM
+    """
+    from stockai.scoring.factors import score_stock, get_score_interpretation
+    from stockai.scoring.signals import SignalGenerator, format_signal_for_display
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    symbol = symbol.upper()
+    console.print(f"\n[bold]Calculating score for {symbol}...[/bold]\n")
+
+    source = YahooFinanceSource()
+
+    # Get stock info
+    info = source.get_stock_info(symbol)
+    if not info:
+        console.print(f"[red]Error: Could not fetch data for {symbol}[/red]")
+        raise typer.Exit(1)
+
+    # Get price history for technical metrics
+    df = source.get_price_history(symbol, period="6mo")
+
+    # Build fundamentals dict
+    fundamentals = {
+        "pe_ratio": info.get("forwardPE") or info.get("trailingPE"),
+        "pb_ratio": info.get("priceToBook"),
+        "roe": info.get("returnOnEquity", 0) * 100 if info.get("returnOnEquity") else None,
+        "debt_to_equity": info.get("debtToEquity", 0) / 100 if info.get("debtToEquity") else None,
+        "profit_margin": info.get("profitMargins", 0) * 100 if info.get("profitMargins") else None,
+        "market_cap": info.get("marketCap"),
+    }
+
+    # Build price data dict
+    price_data = {}
+    if not df.empty:
+        returns = (df["close"].iloc[-1] / df["close"].iloc[0] - 1) * 100
+        price_data["returns_6m"] = returns
+        if len(df) >= 60:
+            price_data["returns_3m"] = (df["close"].iloc[-1] / df["close"].iloc[-60] - 1) * 100
+        if len(df) >= 20:
+            price_data["returns_1m"] = (df["close"].iloc[-1] / df["close"].iloc[-20] - 1) * 100
+            price_data["std_dev"] = df["close"].pct_change().std() * (252 ** 0.5) * 100
+
+        # Calculate beta (simplified)
+        price_data["beta"] = info.get("beta", 1.0)
+
+    # Calculate scores
+    scores = score_stock(symbol, fundamentals, price_data)
+
+    # Display results
+    console.print(Panel(
+        f"[bold cyan]{symbol}[/bold cyan] Multi-Factor Score\n\n"
+        f"[bold]Composite Score: {scores.composite_score:.0f}/100[/bold]\n\n"
+        f"  📊 Value (25%):      {scores.value_score:5.0f}/100\n"
+        f"  ⭐ Quality (30%):    {scores.quality_score:5.0f}/100\n"
+        f"  📈 Momentum (25%):   {scores.momentum_score:5.0f}/100\n"
+        f"  🛡️ Volatility (20%): {scores.volatility_score:5.0f}/100\n\n"
+        f"[dim]Interpretation: {get_score_interpretation(scores.composite_score)}[/dim]",
+        title="📊 Factor Scores",
+        border_style="blue",
+    ))
+
+    # Show metrics
+    table = Table(title="📋 Underlying Metrics", show_header=True)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", justify="right")
+
+    if scores.pe_ratio:
+        table.add_row("P/E Ratio", f"{scores.pe_ratio:.1f}")
+    if scores.pb_ratio:
+        table.add_row("P/B Ratio", f"{scores.pb_ratio:.2f}")
+    if scores.roe:
+        table.add_row("ROE", f"{scores.roe:.1f}%")
+    if scores.debt_to_equity:
+        table.add_row("Debt/Equity", f"{scores.debt_to_equity:.2f}")
+    if scores.profit_margin:
+        table.add_row("Profit Margin", f"{scores.profit_margin:.1f}%")
+    if scores.momentum_6m:
+        table.add_row("6M Return", f"{scores.momentum_6m:.1f}%")
+    if scores.beta:
+        table.add_row("Beta", f"{scores.beta:.2f}")
+    if scores.std_dev:
+        table.add_row("Volatility", f"{scores.std_dev:.1f}%")
+
+    console.print(table)
+
+    # Generate signal
+    current_price = info.get("regularMarketPrice") or info.get("previousClose", 0)
+    if current_price > 0:
+        signal_gen = SignalGenerator()
+        signal = signal_gen.generate_signal(
+            symbol=symbol,
+            current_score=scores.composite_score,
+            current_price=current_price,
+            momentum_score=scores.momentum_score,
+        )
+
+        console.print()
+        console.print(format_signal_for_display(signal))
+
+
+@score_app.command("rank")
+def score_rank(
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index to rank (IDX30, LQ45)"),
+    top: int = typer.Option(10, "--top", "-t", help="Number of top stocks to show"),
+) -> None:
+    """Rank stocks by composite score.
+
+    Shows top N stocks in an index ranked by multi-factor score.
+
+    Examples:
+        stockai score rank
+        stockai score rank --index LQ45 --top 15
+    """
+    from stockai.scoring.factors import score_stock
+    from stockai.data.sources.yahoo import YahooFinanceSource
+    from stockai.data.sources.idx import IDXIndexSource
+
+    console.print(f"\n[bold]Ranking {index} stocks by composite score...[/bold]\n")
+    console.print("[dim]This may take a minute to fetch all data...[/dim]\n")
+
+    # Get stock list
+    idx_source = IDXIndexSource()
+    if index.upper() == "IDX30":
+        stocks = idx_source.get_idx30_stocks()
+    else:
+        stocks = idx_source.get_lq45_stocks()
+
+    source = YahooFinanceSource()
+    rankings = []
+
+    with console.status("[bold green]Fetching stock data..."):
+        for stock in stocks:
+            symbol = stock["symbol"]
+            try:
+                info = source.get_stock_info(symbol)
+                if not info:
+                    continue
+
+                df = source.get_price_history(symbol, period="6mo")
+
+                fundamentals = {
+                    "pe_ratio": info.get("forwardPE") or info.get("trailingPE"),
+                    "pb_ratio": info.get("priceToBook"),
+                    "roe": info.get("returnOnEquity", 0) * 100 if info.get("returnOnEquity") else None,
+                    "debt_to_equity": info.get("debtToEquity", 0) / 100 if info.get("debtToEquity") else None,
+                    "profit_margin": info.get("profitMargins", 0) * 100 if info.get("profitMargins") else None,
+                }
+
+                price_data = {}
+                if not df.empty:
+                    returns = (df["close"].iloc[-1] / df["close"].iloc[0] - 1) * 100
+                    price_data["returns_6m"] = returns
+                    price_data["beta"] = info.get("beta", 1.0)
+                    if len(df) >= 20:
+                        price_data["std_dev"] = df["close"].pct_change().std() * (252 ** 0.5) * 100
+
+                scores = score_stock(symbol, fundamentals, price_data)
+                rankings.append({
+                    "symbol": symbol,
+                    "score": scores.composite_score,
+                    "value": scores.value_score,
+                    "quality": scores.quality_score,
+                    "momentum": scores.momentum_score,
+                    "volatility": scores.volatility_score,
+                    "price": info.get("regularMarketPrice", 0),
+                })
+            except Exception as e:
+                console.print(f"[dim]Skipped {symbol}: {e}[/dim]")
+
+    # Sort by score
+    rankings.sort(key=lambda x: x["score"], reverse=True)
+
+    # Display table
+    table = Table(title=f"🏆 Top {top} Stocks by Score ({index})", show_header=True)
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Symbol", style="cyan")
+    table.add_column("Score", justify="right", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_column("Quality", justify="right")
+    table.add_column("Mom.", justify="right")
+    table.add_column("Vol.", justify="right")
+    table.add_column("Price", justify="right")
+
+    for i, stock in enumerate(rankings[:top], 1):
+        score_style = "green" if stock["score"] >= 70 else "yellow" if stock["score"] >= 50 else "red"
+        table.add_row(
+            str(i),
+            stock["symbol"],
+            f"[{score_style}]{stock['score']:.0f}[/{score_style}]",
+            f"{stock['value']:.0f}",
+            f"{stock['quality']:.0f}",
+            f"{stock['momentum']:.0f}",
+            f"{stock['volatility']:.0f}",
+            f"Rp {stock['price']:,.0f}" if stock['price'] else "-",
+        )
+
+    console.print(table)
+
+
+# =============================================================================
+# RISK COMMANDS - Position sizing and risk management
+# =============================================================================
+
+risk_app = typer.Typer(help="Risk management tools")
+app.add_typer(risk_app, name="risk")
+
+
+@risk_app.command("position")
+def risk_position_size(
+    symbol: str = typer.Argument(..., help="Stock symbol"),
+    capital: int = typer.Option(5_000_000, "--capital", "-c", help="Total capital in Rupiah"),
+    stop_loss_pct: float = typer.Option(8.0, "--stop", "-s", help="Stop-loss percentage below entry"),
+    target_pct: float = typer.Option(15.0, "--target", "-t", help="Target percentage above entry"),
+) -> None:
+    """Calculate optimal position size using 2% risk rule.
+
+    Determines how many lots to buy based on your capital and risk tolerance.
+
+    Examples:
+        stockai risk position BBCA
+        stockai risk position BBRI --capital 10000000 --stop 10
+    """
+    from stockai.risk.position_sizing import calculate_position_size, format_position_size_for_display
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    symbol = symbol.upper()
+    console.print(f"\n[bold]Calculating position size for {symbol}...[/bold]\n")
+
+    source = YahooFinanceSource()
+    info = source.get_stock_info(symbol)
+
+    if not info:
+        console.print(f"[red]Error: Could not fetch data for {symbol}[/red]")
+        raise typer.Exit(1)
+
+    current_price = info.get("regularMarketPrice") or info.get("previousClose", 0)
+    if current_price <= 0:
+        console.print(f"[red]Error: No price data for {symbol}[/red]")
+        raise typer.Exit(1)
+
+    stop_loss_price = current_price * (1 - stop_loss_pct / 100)
+    target_price = current_price * (1 + target_pct / 100)
+
+    pos = calculate_position_size(
+        capital=capital,
+        entry_price=current_price,
+        stop_loss_price=stop_loss_price,
+        target_price=target_price,
+        symbol=symbol,
+    )
+
+    console.print(format_position_size_for_display(pos, capital))
+
+
+@risk_app.command("diversification")
+def risk_diversification() -> None:
+    """Check portfolio diversification against limits.
+
+    Ensures you're not too concentrated in any stock or sector.
+
+    Examples:
+        stockai risk diversification
+    """
+    from stockai.risk.diversification import check_diversification, format_diversification_for_display, DiversificationLimits
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data import get_stock_sector
+
+    path = get_default_paper_path()
+    if not path.exists():
+        console.print("[red]Paper account not found. Use 'stockai paper start' first.[/red]")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+
+    if not account.positions:
+        console.print("[yellow]No positions to check.[/yellow]")
+        return
+
+    # Build positions list with sector info
+    positions = []
+    for symbol, pos in account.positions.items():
+        sector = get_stock_sector(symbol) or "Unknown"
+        positions.append({
+            "symbol": symbol,
+            "value": pos.current_value or pos.total_cost,
+            "sector": sector,
+        })
+
+    check = check_diversification(positions)
+    console.print(format_diversification_for_display(check))
+
+
+@risk_app.command("portfolio")
+def risk_portfolio() -> None:
+    """Analyze portfolio-level risk metrics.
+
+    Shows volatility, VaR, drawdown, and other risk measures.
+
+    Examples:
+        stockai risk portfolio
+    """
+    from stockai.risk.portfolio_risk import calculate_portfolio_risk, format_portfolio_risk_for_display
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+
+    path = get_default_paper_path()
+    if not path.exists():
+        console.print("[red]Paper account not found. Use 'stockai paper start' first.[/red]")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+
+    positions = []
+    for symbol, pos in account.positions.items():
+        positions.append({
+            "symbol": symbol,
+            "value": pos.current_value or pos.total_cost,
+            "weight": 0,  # Will be calculated
+        })
+
+    risk = calculate_portfolio_risk(positions)
+    console.print(format_portfolio_risk_for_display(risk))
+
+
+# =============================================================================
+# BRIEFING COMMANDS - Daily and weekly briefings
+# =============================================================================
+
+@app.command("morning")
+def briefing_morning() -> None:
+    """Get morning briefing before market open.
+
+    Shows critical alerts, portfolio snapshot, and today's focus.
+    Designed to be read in 5 minutes.
+
+    Examples:
+        stockai morning
+    """
+    from stockai.briefing.daily import generate_morning_briefing, format_morning_briefing
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    path = get_default_paper_path()
+    portfolio = None
+
+    if path.exists():
+        account = PaperTradingAccount.load(path)
+
+        # Update prices
+        source = YahooFinanceSource()
+        prices = {}
+        for symbol in account.positions:
+            try:
+                info = source.get_stock_info(symbol)
+                if info:
+                    prices[symbol] = info.get("regularMarketPrice") or info.get("previousClose", 0)
+            except Exception:
+                pass
+        account.update_prices(prices)
+
+        portfolio = {
+            "positions": {s: {
+                "symbol": s,
+                "current_price": p.current_price,
+                "avg_price": p.avg_price,
+                "shares": p.shares,
+                "current_value": p.current_value,
+                "stop_loss": p.stop_loss,
+                "target": p.target,
+            } for s, p in account.positions.items()},
+            "cash": account.cash,
+            "initial_capital": account.initial_capital,
+        }
+
+    briefing = generate_morning_briefing(portfolio=portfolio)
+    console.print(format_morning_briefing(briefing))
+
+
+@app.command("evening")
+def briefing_evening() -> None:
+    """Get evening briefing after market close.
+
+    Shows today's performance, trades, and tomorrow's focus.
+    Designed to be read in 5 minutes.
+
+    Examples:
+        stockai evening
+    """
+    from stockai.briefing.daily import generate_evening_briefing, format_evening_briefing
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    path = get_default_paper_path()
+    portfolio = None
+    trades_today = []
+
+    if path.exists():
+        account = PaperTradingAccount.load(path)
+
+        # Update prices
+        source = YahooFinanceSource()
+        prices = {}
+        for symbol in account.positions:
+            try:
+                info = source.get_stock_info(symbol)
+                if info:
+                    prices[symbol] = info.get("regularMarketPrice") or info.get("previousClose", 0)
+            except Exception:
+                pass
+        account.update_prices(prices)
+
+        portfolio = {
+            "positions": {s: {
+                "symbol": s,
+                "current_price": p.current_price,
+                "avg_price": p.avg_price,
+                "shares": p.shares,
+                "current_value": p.current_value,
+            } for s, p in account.positions.items()},
+            "cash": account.cash,
+            "initial_capital": account.initial_capital,
+        }
+
+        # Get today's trades
+        from datetime import datetime
+        today = datetime.now().date()
+        trades_today = [
+            {
+                "action": t.action.value,
+                "symbol": t.symbol,
+                "lots": t.lots,
+                "price": t.price,
+            }
+            for t in account.trades
+            if t.timestamp.date() == today
+        ]
+
+    briefing = generate_evening_briefing(portfolio=portfolio, trades_today=trades_today)
+    console.print(format_evening_briefing(briefing))
+
+
+@app.command("weekly")
+def briefing_weekly() -> None:
+    """Get weekly performance review.
+
+    Shows week's performance, trade analysis, and lessons learned.
+    Designed for 30-minute weekend review.
+
+    Examples:
+        stockai weekly
+    """
+    from stockai.briefing.weekly import generate_weekly_review, format_weekly_review
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data.sources.yahoo import YahooFinanceSource
+    from datetime import datetime, timedelta
+
+    path = get_default_paper_path()
+
+    if not path.exists():
+        console.print("[red]Paper account not found. Use 'stockai paper start' first.[/red]")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+
+    # Update prices
+    source = YahooFinanceSource()
+    prices = {}
+    for symbol in account.positions:
+        try:
+            info = source.get_stock_info(symbol)
+            if info:
+                prices[symbol] = info.get("regularMarketPrice") or info.get("previousClose", 0)
+        except Exception:
+            pass
+    account.update_prices(prices)
+
+    portfolio = {
+        "positions": {s: {
+            "symbol": s,
+            "current_price": p.current_price,
+            "avg_price": p.avg_price,
+            "shares": p.shares,
+            "current_value": p.current_value,
+        } for s, p in account.positions.items()},
+        "cash": account.cash,
+        "initial_capital": account.initial_capital,
+    }
+
+    # Get this week's trades
+    now = datetime.now()
+    week_start = now - timedelta(days=now.weekday())
+    trades_this_week = [
+        {
+            "action": t.action.value,
+            "symbol": t.symbol,
+            "lots": t.lots,
+            "price": t.price,
+            "pnl": 0,  # Would need to calculate actual P&L
+        }
+        for t in account.trades
+        if t.timestamp >= week_start
+    ]
+
+    # Get IHSG performance (simplified)
+    ihsg_return = 0.0
+    try:
+        ihsg_df = source.get_price_history("^JKSE", period="1wk")
+        if not ihsg_df.empty and len(ihsg_df) >= 2:
+            ihsg_return = (ihsg_df["close"].iloc[-1] / ihsg_df["close"].iloc[0] - 1) * 100
+    except Exception:
+        pass
+
+    review = generate_weekly_review(
+        portfolio=portfolio,
+        trades_this_week=trades_this_week,
+        ihsg_weekly_return=ihsg_return,
+    )
+    console.print(format_weekly_review(review))
+
+
 if __name__ == "__main__":
     app()
