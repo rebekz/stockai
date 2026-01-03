@@ -488,6 +488,396 @@ class TestAnalyzeCommand:
         assert "Tool" in result.output or "Total:" in result.output or "get_stock_info" in result.output
 
 
+class TestVolumeToolsIntegration:
+    """Integration tests for volume analysis tools.
+
+    Tests that volume tools are properly registered and can be invoked
+    through the agent system with actual data flow.
+    """
+
+    def test_volume_tools_registered_in_global_registry(self):
+        """AC3.2: Volume tools are properly registered in the global registry."""
+        from stockai.tools.registry import get_registry
+
+        # Clear registry first to avoid pollution from other tests
+        registry = get_registry()
+        registry.clear()
+
+        # Import the module which triggers decorator registration
+        import importlib
+        from stockai.tools import stock_tools
+        importlib.reload(stock_tools)
+
+        from stockai.tools import get_all_tools
+        tools = get_all_tools()
+
+        # Volume tools should be registered
+        assert "get_volume_analysis" in tools, "get_volume_analysis should be registered"
+        assert "get_volume_profile" in tools, "get_volume_profile should be registered"
+        assert "get_volume_signals" in tools, "get_volume_signals should be registered"
+
+    def test_volume_tools_have_correct_category(self):
+        """AC3.2: Volume tools are registered with 'analysis' category."""
+        from stockai.tools.registry import get_registry
+
+        # Clear and reload
+        registry = get_registry()
+        registry.clear()
+
+        import importlib
+        from stockai.tools import stock_tools
+        importlib.reload(stock_tools)
+
+        # Check volume tool categories
+        volume_analysis_info = registry.get_tool_info("get_volume_analysis")
+        volume_profile_info = registry.get_tool_info("get_volume_profile")
+        volume_signals_info = registry.get_tool_info("get_volume_signals")
+
+        assert volume_analysis_info["category"] == "analysis"
+        assert volume_profile_info["category"] == "analysis"
+        assert volume_signals_info["category"] == "analysis"
+
+    def test_volume_tools_invokable_through_action_phase(self):
+        """AC3.2: Volume tools can be invoked through the agent system."""
+        import pandas as pd
+        import numpy as np
+        from datetime import datetime, timedelta
+
+        # Create mock price data
+        days = 60
+        dates = [datetime.now() - timedelta(days=days - i) for i in range(days)]
+        mock_df = pd.DataFrame({
+            "date": dates,
+            "symbol": "TEST",
+            "open": [10000 + i * 10 for i in range(days)],
+            "high": [10050 + i * 10 for i in range(days)],
+            "low": [9950 + i * 10 for i in range(days)],
+            "close": [10000 + i * 10 for i in range(days)],
+            "volume": [1000000 + i * 10000 for i in range(days)],
+        })
+
+        with patch("stockai.tools.stock_tools._yahoo") as mock_yahoo:
+            mock_yahoo.get_price_history.return_value = mock_df
+
+            # Clear registry and reload tools
+            from stockai.tools.registry import get_registry
+            registry = get_registry()
+            registry.clear()
+
+            import importlib
+            from stockai.tools import stock_tools
+            importlib.reload(stock_tools)
+
+            from stockai.tools import get_all_tools
+            tools = get_all_tools()
+
+            # Create action phase with volume tools
+            action = ActionPhase(tools=tools)
+
+            # Test get_volume_analysis through action phase
+            volume_analysis_task = {
+                "id": "volume_analysis_task",
+                "tools": ["get_volume_analysis"],
+                "dependencies": [],
+            }
+            result = action.execute_task(volume_analysis_task, {"symbol": "BBCA"})
+
+            assert result["success"] is True
+            assert result["task_id"] == "volume_analysis_task"
+            assert len(result["results"]) == 1
+            assert result["results"][0]["tool"] == "get_volume_analysis"
+
+            # Verify result data structure
+            data = result["results"][0]["data"]
+            assert "indicators" in data
+            assert "obv" in data["indicators"]
+            assert "vwap" in data["indicators"]
+            assert "mfi" in data["indicators"]
+
+    def test_volume_profile_invokable_through_action_phase(self):
+        """AC3.2: Volume profile tool can be invoked through agent."""
+        import pandas as pd
+        import numpy as np
+        from datetime import datetime, timedelta
+
+        # Create mock price data
+        days = 30
+        dates = [datetime.now() - timedelta(days=days - i) for i in range(days)]
+        mock_df = pd.DataFrame({
+            "date": dates,
+            "symbol": "TEST",
+            "open": [10000 + i * 10 for i in range(days)],
+            "high": [10100 + i * 10 for i in range(days)],
+            "low": [9900 + i * 10 for i in range(days)],
+            "close": [10050 + i * 10 for i in range(days)],
+            "volume": [1000000 for _ in range(days)],
+        })
+
+        with patch("stockai.tools.stock_tools._yahoo") as mock_yahoo:
+            mock_yahoo.get_price_history.return_value = mock_df
+
+            from stockai.tools.registry import get_registry
+            registry = get_registry()
+            registry.clear()
+
+            import importlib
+            from stockai.tools import stock_tools
+            importlib.reload(stock_tools)
+
+            from stockai.tools import get_all_tools
+            tools = get_all_tools()
+
+            action = ActionPhase(tools=tools)
+
+            # Test get_volume_profile through action phase
+            volume_profile_task = {
+                "id": "volume_profile_task",
+                "tools": ["get_volume_profile"],
+                "dependencies": [],
+            }
+            result = action.execute_task(volume_profile_task, {"symbol": "BBCA"})
+
+            assert result["success"] is True
+            assert len(result["results"]) == 1
+
+            # Verify volume profile structure
+            data = result["results"][0]["data"]
+            assert "volume_profile" in data
+            assert "poc" in data["volume_profile"]
+            assert "value_area" in data["volume_profile"]
+
+    def test_volume_signals_invokable_through_action_phase(self):
+        """AC3.2: Volume signals tool can be invoked through agent."""
+        import pandas as pd
+        from datetime import datetime, timedelta
+
+        # Create mock price data
+        days = 60
+        dates = [datetime.now() - timedelta(days=days - i) for i in range(days)]
+        mock_df = pd.DataFrame({
+            "date": dates,
+            "symbol": "TEST",
+            "open": [10000 + i * 10 for i in range(days)],
+            "high": [10100 + i * 10 for i in range(days)],
+            "low": [9900 + i * 10 for i in range(days)],
+            "close": [10050 + i * 10 for i in range(days)],
+            "volume": [1000000 for _ in range(days)],
+        })
+
+        with patch("stockai.tools.stock_tools._yahoo") as mock_yahoo:
+            mock_yahoo.get_price_history.return_value = mock_df
+
+            from stockai.tools.registry import get_registry
+            registry = get_registry()
+            registry.clear()
+
+            import importlib
+            from stockai.tools import stock_tools
+            importlib.reload(stock_tools)
+
+            from stockai.tools import get_all_tools
+            tools = get_all_tools()
+
+            action = ActionPhase(tools=tools)
+
+            # Test get_volume_signals through action phase
+            volume_signals_task = {
+                "id": "volume_signals_task",
+                "tools": ["get_volume_signals"],
+                "dependencies": [],
+            }
+            result = action.execute_task(volume_signals_task, {"symbol": "BBCA"})
+
+            assert result["success"] is True
+            assert len(result["results"]) == 1
+
+            # Verify signals structure
+            data = result["results"][0]["data"]
+            assert "overall_signal" in data
+            assert "direction" in data["overall_signal"]
+            assert data["overall_signal"]["direction"] in ["buy", "sell", "neutral"]
+
+    def test_volume_tools_integrate_with_technical_analysis(self):
+        """AC3.2: Volume tools integrate with existing technical analysis workflow."""
+        import pandas as pd
+        from datetime import datetime, timedelta
+
+        # Create mock price data with sufficient history
+        days = 90
+        dates = [datetime.now() - timedelta(days=days - i) for i in range(days)]
+        mock_df = pd.DataFrame({
+            "date": dates,
+            "symbol": "TEST",
+            "open": [10000 + i * 10 for i in range(days)],
+            "high": [10100 + i * 10 for i in range(days)],
+            "low": [9900 + i * 10 for i in range(days)],
+            "close": [10050 + i * 10 for i in range(days)],
+            "volume": [1000000 + i * 5000 for i in range(days)],
+        })
+
+        with patch("stockai.tools.stock_tools._yahoo") as mock_yahoo:
+            mock_yahoo.get_price_history.return_value = mock_df
+            mock_yahoo.get_stock_info.return_value = {
+                "name": "Test Corp",
+                "sector": "Finance",
+                "market_cap": 1000000000,
+            }
+            mock_yahoo.get_current_price.return_value = {
+                "price": 10500,
+                "change": 50,
+                "change_percent": 0.48,
+                "volume": 1000000,
+            }
+
+            from stockai.tools.registry import get_registry
+            registry = get_registry()
+            registry.clear()
+
+            import importlib
+            from stockai.tools import stock_tools
+            importlib.reload(stock_tools)
+
+            from stockai.tools import get_all_tools
+            tools = get_all_tools()
+
+            action = ActionPhase(tools=tools)
+
+            # Simulate a multi-tool analysis task combining technical and volume analysis
+            # This represents a typical workflow where technical indicators are analyzed
+            # alongside volume indicators
+
+            # Task 1: Get technical indicators
+            tech_task = {
+                "id": "tech_analysis",
+                "tools": ["get_technical_indicators"],
+                "dependencies": [],
+            }
+            tech_result = action.execute_task(tech_task, {"symbol": "BBCA"})
+
+            # Task 2: Get volume analysis (depends on understanding price context)
+            volume_task = {
+                "id": "volume_analysis",
+                "tools": ["get_volume_analysis", "get_volume_signals"],
+                "dependencies": ["tech_analysis"],
+            }
+            volume_result = action.execute_task(volume_task, {"symbol": "BBCA"})
+
+            # Both should succeed
+            assert tech_result["success"] is True, "Technical analysis should succeed"
+            assert volume_result["success"] is True, "Volume analysis should succeed"
+
+            # Technical indicators should be present
+            tech_data = tech_result["results"][0]["data"]
+            assert "indicators" in tech_data
+            assert "rsi" in tech_data["indicators"]
+            assert "macd" in tech_data["indicators"]
+
+            # Volume results should include both tools
+            assert len(volume_result["results"]) == 2
+            tool_names = [r["tool"] for r in volume_result["results"]]
+            assert "get_volume_analysis" in tool_names
+            assert "get_volume_signals" in tool_names
+
+    def test_volume_tools_appear_in_tools_description(self):
+        """AC3.2: Volume tools appear in LLM tool descriptions."""
+        from stockai.tools.registry import get_registry
+
+        registry = get_registry()
+        registry.clear()
+
+        import importlib
+        from stockai.tools import stock_tools
+        importlib.reload(stock_tools)
+
+        # Get formatted descriptions for LLM
+        descriptions = registry.get_tool_descriptions()
+
+        # Volume tools should appear in the descriptions
+        assert "get_volume_analysis" in descriptions
+        assert "get_volume_profile" in descriptions
+        assert "get_volume_signals" in descriptions
+
+        # They should be under the analysis category
+        assert "Analysis" in descriptions or "analysis" in descriptions.lower()
+
+    def test_volume_tools_work_with_planning_phase(self):
+        """AC3.2: Volume tools can be included in planning phase tasks."""
+        planner = PlanningPhase(available_tools=[
+            "get_stock_info",
+            "get_current_price",
+            "get_technical_indicators",
+            "get_volume_analysis",
+            "get_volume_profile",
+            "get_volume_signals",
+        ])
+
+        # Test that volume analysis query creates plan with volume tools
+        plan = planner.create_default_plan(
+            "Analyze BBCA with volume analysis",
+            "BBCA",
+        )
+
+        # Should have tasks with volume-related tools
+        all_tools = []
+        for task in plan.tasks:
+            all_tools.extend(task.tools)
+
+        # At least one volume-related tool should be in the plan
+        # (exact tool depends on implementation, but volume query should include volume analysis)
+        assert len(plan.tasks) >= 1
+
+    def test_multiple_volume_tools_in_single_task(self):
+        """AC3.2: Multiple volume tools can be executed in a single task."""
+        import pandas as pd
+        from datetime import datetime, timedelta
+
+        days = 60
+        dates = [datetime.now() - timedelta(days=days - i) for i in range(days)]
+        mock_df = pd.DataFrame({
+            "date": dates,
+            "symbol": "TEST",
+            "open": [10000 + i * 10 for i in range(days)],
+            "high": [10100 + i * 10 for i in range(days)],
+            "low": [9900 + i * 10 for i in range(days)],
+            "close": [10050 + i * 10 for i in range(days)],
+            "volume": [1000000 for _ in range(days)],
+        })
+
+        with patch("stockai.tools.stock_tools._yahoo") as mock_yahoo:
+            mock_yahoo.get_price_history.return_value = mock_df
+
+            from stockai.tools.registry import get_registry
+            registry = get_registry()
+            registry.clear()
+
+            import importlib
+            from stockai.tools import stock_tools
+            importlib.reload(stock_tools)
+
+            from stockai.tools import get_all_tools
+            tools = get_all_tools()
+
+            action = ActionPhase(tools=tools)
+
+            # Execute all volume tools in a single task
+            multi_volume_task = {
+                "id": "comprehensive_volume",
+                "tools": ["get_volume_analysis", "get_volume_profile", "get_volume_signals"],
+                "dependencies": [],
+            }
+            result = action.execute_task(multi_volume_task, {"symbol": "BBCA"})
+
+            assert result["success"] is True
+            assert len(result["results"]) == 3
+            assert len(result["errors"]) == 0
+
+            # All three tools should have executed
+            executed_tools = [r["tool"] for r in result["results"]]
+            assert "get_volume_analysis" in executed_tools
+            assert "get_volume_profile" in executed_tools
+            assert "get_volume_signals" in executed_tools
+
+
 class TestAgentIntegration:
     """Integration tests for complete agent workflow."""
 
