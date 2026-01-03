@@ -2103,6 +2103,243 @@ def agents_risk(
         raise typer.Exit(1)
 
 
+@agents_app.command("daily")
+def agents_daily(
+    capital: int = typer.Argument(..., help="Investment capital in Rupiah (e.g., 1000000)"),
+    horizon: str = typer.Option("both", "--horizon", "-h", help="Investment horizon: short, long, or both"),
+    holdings: str = typer.Option(None, "--holdings", help="Current holdings to check for sell signals (e.g., 'BBCA,TLKM')"),
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index to scan (IDX30, LQ45)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed analysis"),
+) -> None:
+    """Daily trading recommendations based on your capital.
+
+    Scans the market and provides personalized portfolio allocation
+    with specific buy/sell recommendations for both short-term
+    and long-term strategies.
+
+    Examples:
+        stock agents daily 1000000
+        stock agents daily 5000000 --horizon short
+        stock agents daily 10000000 --holdings "BBCA,TLKM"
+        stock agents daily 50000000 --horizon long --index LQ45
+    """
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.markdown import Markdown
+
+    from stockai.agents import create_trading_orchestrator
+    from stockai.config import get_settings
+
+    settings = get_settings()
+
+    if not settings.has_google_api:
+        console.print("[red]Error:[/red] Google API key not configured.")
+        raise typer.Exit(1)
+
+    # Format capital for display
+    if capital >= 1_000_000_000:
+        capital_str = f"Rp {capital/1_000_000_000:.1f}B"
+    elif capital >= 1_000_000:
+        capital_str = f"Rp {capital/1_000_000:.1f}M"
+    else:
+        capital_str = f"Rp {capital:,}"
+
+    console.print(f"\n[bold]📊 Daily Trading Recommendations[/bold]")
+    console.print(f"[bold cyan]Capital:[/bold cyan] {capital_str}")
+    console.print(f"[bold cyan]Horizon:[/bold cyan] {horizon.upper()}")
+    if holdings:
+        console.print(f"[bold cyan]Holdings:[/bold cyan] {holdings.upper()}")
+    console.print()
+
+    # Build the query for the orchestrator
+    query_parts = [
+        f"I have {capital_str} to invest in Indonesian stocks.",
+        f"Scan {index.upper()} and provide specific portfolio recommendations.",
+    ]
+
+    if horizon == "short":
+        query_parts.append("Focus on SHORT-TERM trades (1-2 weeks) for quick gains.")
+    elif horizon == "long":
+        query_parts.append("Focus on LONG-TERM investments (3-12 months) for steady growth.")
+    else:
+        query_parts.append("Provide BOTH short-term (1-2 weeks) and long-term (3-12 months) recommendations.")
+
+    query_parts.extend([
+        "For each stock recommendation, provide:",
+        "1. Specific number of LOTS to buy (1 lot = 100 shares)",
+        "2. Total investment amount in Rupiah",
+        "3. Entry price zone",
+        "4. Stop-loss level",
+        "5. Target prices",
+        "6. Risk-reward ratio",
+    ])
+
+    if holdings:
+        holdings_list = [h.strip().upper() for h in holdings.split(",")]
+        query_parts.append(f"\nAlso analyze my current holdings: {', '.join(holdings_list)}")
+        query_parts.append("Tell me which to HOLD, which to SELL, and recommended exit points.")
+
+    query_parts.append(f"\nEnsure total recommended investment does not exceed {capital_str}.")
+    query_parts.append("Include a summary table with all positions and allocation percentages.")
+
+    query = "\n".join(query_parts)
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=not verbose,
+        ) as progress:
+            task = progress.add_task("Running multi-agent analysis...", total=None)
+
+            orchestrator = create_trading_orchestrator()
+
+            result = orchestrator.run(query=query)
+
+        if result.get("success"):
+            answer = result.get("answer", "")
+
+            # Display header with recommendation summary
+            recommendation = result.get("recommendation")
+            score = result.get("composite_score", 0)
+
+            if recommendation or score:
+                console.print(
+                    Panel(
+                        f"[bold]Market Outlook:[/bold] {recommendation or 'See analysis below'}\n"
+                        f"[bold]Confidence Score:[/bold] {score:.1f}/10",
+                        title=f"📊 Daily Portfolio ({capital_str})",
+                        border_style="blue",
+                    )
+                )
+
+            # Display the full analysis
+            if answer:
+                console.print()
+                console.print(Markdown(answer))
+
+            # Quick reference table
+            console.print(
+                Panel(
+                    "[bold]Quick Actions:[/bold]\n\n"
+                    f"• [cyan]stockai agents analyze <SYMBOL>[/cyan] - Deep dive on specific stock\n"
+                    f"• [cyan]stockai agents risk <SYMBOL>[/cyan] - Risk assessment\n"
+                    f"• [cyan]stockai portfolio add <SYMBOL> <LOTS> <PRICE>[/cyan] - Record purchase\n\n"
+                    "[dim]Note: 1 lot = 100 shares. Minimum transaction on IDX is 1 lot.[/dim]",
+                    title="📌 Next Steps",
+                    border_style="dim",
+                )
+            )
+        else:
+            console.print(f"[red]Analysis failed:[/red] {result.get('error', 'Unknown error')}")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        if verbose:
+            import traceback
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        raise typer.Exit(1)
+
+
+@agents_app.command("signal")
+def agents_signal(
+    symbol: str = typer.Argument(..., help="Stock symbol"),
+    format: str = typer.Option("table", "--format", "-f", help="Output format: table, markdown, json"),
+) -> None:
+    """Get quick trading signal for a stock.
+
+    Provides entry/exit points without full analysis.
+
+    Examples:
+        stock agents signal BBCA
+        stock agents signal TLKM --format markdown
+    """
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+
+    from stockai.agents import create_trading_orchestrator
+    from stockai.config import get_settings
+
+    symbol = symbol.upper()
+    settings = get_settings()
+
+    if not settings.has_google_api:
+        console.print("[red]Error:[/red] Google API key not configured.")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]⚡ Quick Signal: {symbol}[/bold]\n")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Generating signal...", total=None)
+
+            orchestrator = create_trading_orchestrator()
+
+            result = orchestrator.run(
+                query=f"""Provide a quick trading signal for {symbol}:
+                - Current price and trend
+                - BUY/SELL/HOLD recommendation
+                - Entry zone (price range)
+                - Stop-loss level
+                - Target 1 and Target 2
+                - Risk-reward ratio
+                - Confidence level
+
+                Format as a clear, concise signal card.""",
+                symbol=symbol,
+            )
+
+        if result.get("success"):
+            recommendation = result.get("recommendation", "HOLD")
+            score = result.get("composite_score", 5.0)
+
+            # Color based on recommendation
+            if "BUY" in recommendation:
+                color = "green"
+                icon = "📈"
+            elif "SELL" in recommendation:
+                color = "red"
+                icon = "📉"
+            else:
+                color = "yellow"
+                icon = "➡️"
+
+            if format == "table":
+                console.print(
+                    Panel(
+                        f"[bold {color}]{icon} {recommendation}[/bold {color}]\n\n"
+                        f"[bold]Score:[/bold] {score:.1f}/10\n\n"
+                        f"{result.get('answer', 'See details below')}",
+                        title=f"⚡ {symbol} Signal",
+                        border_style=color,
+                    )
+                )
+            elif format == "markdown":
+                from rich.markdown import Markdown
+                console.print(Markdown(result.get("answer", "")))
+            else:
+                import json
+                output = {
+                    "symbol": symbol,
+                    "recommendation": recommendation,
+                    "score": score,
+                    "analysis": result.get("answer", ""),
+                }
+                console.print(json.dumps(output, indent=2))
+        else:
+            console.print(f"[red]Failed:[/red] {result.get('error', 'Unknown error')}")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+
 @agents_app.command("list")
 def agents_list() -> None:
     """List all available trading agents.
