@@ -2649,5 +2649,581 @@ def auto_schedule() -> None:
     console.print("  stockai auto start 10000000 --telegram-token TOKEN --telegram-chat CHAT_ID")
 
 
+# ============================================================================
+# TUTORIAL & LEARNING
+# ============================================================================
+
+learn_app = typer.Typer(help="Learn stock trading step by step")
+app.add_typer(learn_app, name="learn")
+
+
+@learn_app.command("start")
+def learn_start() -> None:
+    """Start the beginner tutorial.
+
+    Interactive lessons covering:
+    - Stock market basics
+    - How to analyze stocks
+    - Risk management
+    - Using StockAI effectively
+
+    Examples:
+        stockai learn start
+    """
+    from stockai.tutorial.lessons import get_all_lessons, LessonProgress, LessonCategory
+    from pathlib import Path
+
+    lessons = get_all_lessons()
+    progress_path = Path.home() / ".stockai" / "learning_progress.json"
+    progress = LessonProgress.load(progress_path) if progress_path.exists() else LessonProgress()
+
+    # Welcome message
+    console.print(
+        Panel(
+            "[bold]Selamat Datang di StockAI Learning![/bold]\n\n"
+            "Tutorial interaktif untuk belajar investasi saham Indonesia.\n\n"
+            f"📚 Total Pelajaran: {len(lessons)}\n"
+            f"✅ Selesai: {len(progress.completed_lessons)}\n"
+            f"📈 Progress: {progress.get_progress_percent(len(lessons)):.0f}%\n\n"
+            "[dim]Ketik 'stockai learn list' untuk melihat daftar pelajaran[/dim]",
+            title="📖 StockAI Learning",
+            border_style="blue",
+        )
+    )
+
+    # Show categories
+    console.print("\n[bold]Kategori Pelajaran:[/bold]\n")
+
+    categories = {
+        LessonCategory.BASICS: ("📘 Dasar-Dasar", "Apa itu saham, cara untung, lot & biaya"),
+        LessonCategory.ANALYSIS: ("📊 Analisis", "Fundamental & teknikal analysis"),
+        LessonCategory.RISK: ("⚠️ Manajemen Risiko", "Stop-loss, position sizing, diversifikasi"),
+        LessonCategory.STOCKAI: ("🤖 Menggunakan StockAI", "Command dan workflow"),
+    }
+
+    for cat, (icon, desc) in categories.items():
+        cat_lessons = [l for l in lessons if l.category == cat]
+        completed = len([l for l in cat_lessons if l.id in progress.completed_lessons])
+        console.print(f"  {icon}: {desc} ({completed}/{len(cat_lessons)})")
+
+    console.print("\n[bold]Mulai Belajar:[/bold]")
+    console.print("  stockai learn lesson basics_01_what_is_stock")
+    console.print("  stockai learn list")
+
+
+@learn_app.command("list")
+def learn_list() -> None:
+    """List all available lessons."""
+    from stockai.tutorial.lessons import get_all_lessons, LessonProgress
+    from pathlib import Path
+
+    lessons = get_all_lessons()
+    progress_path = Path.home() / ".stockai" / "learning_progress.json"
+    progress = LessonProgress.load(progress_path) if progress_path.exists() else LessonProgress()
+
+    table = Table(title="📚 Daftar Pelajaran", show_header=True)
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Status", width=3)
+    table.add_column("ID", style="cyan")
+    table.add_column("Judul")
+    table.add_column("Durasi", justify="right", style="dim")
+
+    for i, lesson in enumerate(lessons, 1):
+        status = "✅" if lesson.id in progress.completed_lessons else "⬜"
+        table.add_row(
+            str(i),
+            status,
+            lesson.id,
+            lesson.title,
+            f"{lesson.duration_minutes} menit",
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]Progress: {len(progress.completed_lessons)}/{len(lessons)} selesai[/dim]")
+    console.print("\n[bold]Buka pelajaran:[/bold] stockai learn lesson <ID>")
+
+
+@learn_app.command("lesson")
+def learn_lesson(
+    lesson_id: str = typer.Argument(..., help="Lesson ID to view"),
+    mark_complete: bool = typer.Option(False, "--complete", "-c", help="Mark lesson as complete"),
+) -> None:
+    """View a specific lesson.
+
+    Examples:
+        stockai learn lesson basics_01_what_is_stock
+        stockai learn lesson basics_02_how_to_profit --complete
+    """
+    from stockai.tutorial.lessons import get_lesson, get_next_lesson, LessonProgress
+    from rich.markdown import Markdown
+    from pathlib import Path
+
+    lesson = get_lesson(lesson_id)
+    if not lesson:
+        console.print(f"[red]Pelajaran tidak ditemukan:[/red] {lesson_id}")
+        console.print("Gunakan 'stockai learn list' untuk melihat daftar pelajaran.")
+        raise typer.Exit(1)
+
+    # Display lesson
+    console.print(
+        Panel(
+            f"[bold]{lesson.title}[/bold]\n"
+            f"[dim]Kategori: {lesson.category.value} | Durasi: {lesson.duration_minutes} menit[/dim]",
+            border_style="blue",
+        )
+    )
+
+    # Content
+    console.print(Markdown(lesson.content))
+
+    # Key points
+    if lesson.key_points:
+        console.print("\n[bold yellow]📌 Poin Penting:[/bold yellow]")
+        for point in lesson.key_points:
+            console.print(f"  • {point}")
+
+    # Practice command
+    if lesson.practice_command:
+        console.print(f"\n[bold green]💻 Latihan:[/bold green]")
+        console.print(f"  {lesson.practice_command}")
+
+    # Quiz
+    if lesson.quiz_questions:
+        console.print(f"\n[bold cyan]📝 Quiz tersedia![/bold cyan] Jalankan: stockai learn quiz {lesson_id}")
+
+    # Mark complete
+    progress_path = Path.home() / ".stockai" / "learning_progress.json"
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    progress = LessonProgress.load(progress_path) if progress_path.exists() else LessonProgress()
+
+    if mark_complete:
+        progress.complete_lesson(lesson_id)
+        progress.save(progress_path)
+        console.print("\n[green]✅ Pelajaran ditandai selesai![/green]")
+
+    # Next lesson
+    next_lesson = get_next_lesson(lesson_id)
+    if next_lesson:
+        console.print(f"\n[dim]Pelajaran berikutnya: stockai learn lesson {next_lesson.id}[/dim]")
+
+
+@learn_app.command("quiz")
+def learn_quiz(
+    lesson_id: str = typer.Argument(..., help="Lesson ID to take quiz for"),
+) -> None:
+    """Take a quiz for a lesson.
+
+    Examples:
+        stockai learn quiz basics_01_what_is_stock
+    """
+    from stockai.tutorial.lessons import get_lesson, LessonProgress
+    from stockai.tutorial.quiz import Question, Quiz
+    from pathlib import Path
+
+    lesson = get_lesson(lesson_id)
+    if not lesson:
+        console.print(f"[red]Pelajaran tidak ditemukan:[/red] {lesson_id}")
+        raise typer.Exit(1)
+
+    if not lesson.quiz_questions:
+        console.print(f"[yellow]Pelajaran ini tidak memiliki quiz.[/yellow]")
+        raise typer.Exit(0)
+
+    # Create quiz
+    questions = [
+        Question(
+            text=q["question"],
+            options=q["options"],
+            correct_index=q["correct"],
+        )
+        for q in lesson.quiz_questions
+    ]
+    quiz = Quiz(lesson_id=lesson_id, questions=questions)
+
+    console.print(
+        Panel(
+            f"[bold]Quiz: {lesson.title}[/bold]\n"
+            f"[dim]{len(questions)} pertanyaan[/dim]",
+            border_style="cyan",
+        )
+    )
+
+    # Interactive quiz
+    correct = 0
+    for i, question in enumerate(questions, 1):
+        console.print(f"\n[bold]Pertanyaan {i}/{len(questions)}:[/bold]")
+        console.print(f"  {question.text}\n")
+
+        for j, option in enumerate(question.options):
+            console.print(f"    {j + 1}. {option}")
+
+        while True:
+            try:
+                answer = typer.prompt("\nJawaban Anda (1-4)")
+                answer_idx = int(answer) - 1
+                if 0 <= answer_idx < len(question.options):
+                    break
+                console.print("[red]Pilih 1-4[/red]")
+            except ValueError:
+                console.print("[red]Masukkan angka 1-4[/red]")
+
+        if question.check_answer(answer_idx):
+            console.print("[green]✅ Benar![/green]")
+            correct += 1
+        else:
+            console.print(f"[red]❌ Salah. Jawaban benar: {question.correct_answer}[/red]")
+
+    # Results
+    score = (correct / len(questions)) * 100
+    passed = score >= 70
+
+    console.print(
+        Panel(
+            f"[bold]Hasil Quiz[/bold]\n\n"
+            f"Benar: {correct}/{len(questions)}\n"
+            f"Score: {score:.0f}%\n"
+            f"Status: {'[green]LULUS ✅[/green]' if passed else '[red]BELUM LULUS ❌[/red]'}",
+            border_style="green" if passed else "red",
+        )
+    )
+
+    # Save progress if passed
+    if passed:
+        progress_path = Path.home() / ".stockai" / "learning_progress.json"
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        progress = LessonProgress.load(progress_path) if progress_path.exists() else LessonProgress()
+        progress.complete_lesson(lesson_id)
+        progress.set_quiz_score(lesson_id, score)
+        progress.save(progress_path)
+        console.print("[green]Pelajaran ditandai selesai![/green]")
+
+
+# ============================================================================
+# PAPER TRADING
+# ============================================================================
+
+paper_app = typer.Typer(help="Paper trading (simulated) for practice")
+app.add_typer(paper_app, name="paper")
+
+
+@paper_app.command("start")
+def paper_start(
+    capital: int = typer.Argument(10_000_000, help="Starting capital in Rupiah"),
+) -> None:
+    """Start a new paper trading account.
+
+    Creates a simulated trading account to practice without real money.
+
+    Examples:
+        stockai paper start              # Default Rp 10 million
+        stockai paper start 5000000      # Start with Rp 5 million
+    """
+    from stockai.tutorial.paper_trading import create_paper_account, get_default_paper_path
+
+    path = get_default_paper_path()
+
+    if path.exists():
+        if not typer.confirm("Paper account sudah ada. Reset dengan modal baru?"):
+            console.print("[yellow]Dibatalkan.[/yellow]")
+            raise typer.Exit(0)
+
+    account = create_paper_account(capital=capital, save_path=path)
+
+    console.print(
+        Panel(
+            f"[bold green]Paper Trading Account Created![/bold green]\n\n"
+            f"💰 Modal Awal: Rp {capital:,}\n"
+            f"📁 Saved to: {path}\n\n"
+            "[dim]Mulai trading dengan:[/dim]\n"
+            "  stockai paper buy BBRI 2\n"
+            "  stockai paper portfolio",
+            title="📝 Paper Trading",
+            border_style="green",
+        )
+    )
+
+
+@paper_app.command("buy")
+def paper_buy(
+    symbol: str = typer.Argument(..., help="Stock symbol"),
+    lots: int = typer.Argument(..., help="Number of lots to buy"),
+    price: float = typer.Option(None, "--price", "-p", help="Buy price (auto-fetch if not specified)"),
+    stop_loss: float = typer.Option(None, "--stoploss", "-sl", help="Stop-loss price"),
+    target: float = typer.Option(None, "--target", "-t", help="Target price"),
+    notes: str = typer.Option("", "--notes", "-n", help="Trade notes"),
+) -> None:
+    """Execute a paper buy order.
+
+    Examples:
+        stockai paper buy BBRI 2
+        stockai paper buy BBCA 1 --price 9500 --stoploss 8800 --target 10500
+    """
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    path = get_default_paper_path()
+    if not path.exists():
+        console.print("[red]Paper account belum dibuat. Jalankan:[/red] stockai paper start")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+    symbol = symbol.upper()
+
+    # Auto-fetch price if not specified
+    if price is None:
+        with console.status(f"Fetching {symbol} price..."):
+            yahoo = YahooFinanceSource()
+            ticker = f"{symbol}.JK"
+            info = yahoo.get_stock_info(ticker)
+            price = info.get("regularMarketPrice") or info.get("previousClose")
+            if not price:
+                console.print(f"[red]Cannot fetch price for {symbol}. Specify with --price[/red]")
+                raise typer.Exit(1)
+
+    result = account.buy(symbol, lots, price, stop_loss, target, notes)
+
+    if isinstance(result, str):
+        console.print(f"[red]Error:[/red] {result}")
+        raise typer.Exit(1)
+
+    account.save(path)
+
+    total = lots * 100 * price
+    console.print(
+        Panel(
+            f"[bold green]BUY Order Executed[/bold green]\n\n"
+            f"📈 {symbol}: {lots} lot @ Rp {price:,.0f}\n"
+            f"💵 Total: Rp {total:,.0f} + fee Rp {result.fee:,.0f}\n"
+            f"💰 Cash remaining: Rp {account.cash:,.0f}"
+            + (f"\n🛑 Stop-loss: Rp {stop_loss:,.0f}" if stop_loss else "")
+            + (f"\n🎯 Target: Rp {target:,.0f}" if target else ""),
+            title="✅ Paper Trade",
+            border_style="green",
+        )
+    )
+
+
+@paper_app.command("sell")
+def paper_sell(
+    symbol: str = typer.Argument(..., help="Stock symbol"),
+    lots: int = typer.Argument(..., help="Number of lots to sell"),
+    price: float = typer.Option(None, "--price", "-p", help="Sell price (auto-fetch if not specified)"),
+    notes: str = typer.Option("", "--notes", "-n", help="Trade notes"),
+) -> None:
+    """Execute a paper sell order.
+
+    Examples:
+        stockai paper sell BBRI 1
+        stockai paper sell BBCA 2 --price 10000
+    """
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    path = get_default_paper_path()
+    if not path.exists():
+        console.print("[red]Paper account belum dibuat. Jalankan:[/red] stockai paper start")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+    symbol = symbol.upper()
+
+    # Auto-fetch price
+    if price is None:
+        with console.status(f"Fetching {symbol} price..."):
+            yahoo = YahooFinanceSource()
+            ticker = f"{symbol}.JK"
+            info = yahoo.get_stock_info(ticker)
+            price = info.get("regularMarketPrice") or info.get("previousClose")
+            if not price:
+                console.print(f"[red]Cannot fetch price for {symbol}. Specify with --price[/red]")
+                raise typer.Exit(1)
+
+    # Calculate P&L before selling
+    if symbol in account.positions:
+        pos = account.positions[symbol]
+        pnl_per_share = price - pos.avg_price
+        pnl_total = pnl_per_share * lots * 100
+        pnl_pct = (pnl_per_share / pos.avg_price) * 100
+    else:
+        pnl_total = 0
+        pnl_pct = 0
+
+    result = account.sell(symbol, lots, price, notes)
+
+    if isinstance(result, str):
+        console.print(f"[red]Error:[/red] {result}")
+        raise typer.Exit(1)
+
+    account.save(path)
+
+    pnl_color = "green" if pnl_total >= 0 else "red"
+    console.print(
+        Panel(
+            f"[bold red]SELL Order Executed[/bold red]\n\n"
+            f"📉 {symbol}: {lots} lot @ Rp {price:,.0f}\n"
+            f"💵 Proceeds: Rp {result.total_value:,.0f} (after fee Rp {result.fee:,.0f})\n"
+            f"[{pnl_color}]P&L: Rp {pnl_total:,.0f} ({pnl_pct:+.1f}%)[/{pnl_color}]\n"
+            f"💰 Cash: Rp {account.cash:,.0f}",
+            title="✅ Paper Trade",
+            border_style="red",
+        )
+    )
+
+
+@paper_app.command("portfolio")
+def paper_portfolio() -> None:
+    """View paper trading portfolio.
+
+    Shows current positions, P&L, and account summary.
+
+    Examples:
+        stockai paper portfolio
+    """
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    path = get_default_paper_path()
+    if not path.exists():
+        console.print("[red]Paper account belum dibuat. Jalankan:[/red] stockai paper start")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+
+    # Update prices
+    if account.positions:
+        with console.status("Updating prices..."):
+            yahoo = YahooFinanceSource()
+            prices = {}
+            for symbol in account.positions.keys():
+                try:
+                    info = yahoo.get_stock_info(f"{symbol}.JK")
+                    prices[symbol] = info.get("regularMarketPrice") or info.get("previousClose", 0)
+                except Exception:
+                    pass
+            account.update_prices(prices)
+
+    # Summary
+    summary = account.get_summary()
+    pnl_color = "green" if summary["total_pnl"] >= 0 else "red"
+
+    console.print(
+        Panel(
+            f"[bold]Paper Trading Portfolio[/bold]\n\n"
+            f"💰 Modal Awal: Rp {summary['initial_capital']:,.0f}\n"
+            f"💵 Cash: Rp {summary['cash']:,.0f}\n"
+            f"📊 Nilai Portfolio: Rp {summary['portfolio_value']:,.0f}\n"
+            f"[{pnl_color}]📈 Total P&L: Rp {summary['total_pnl']:,.0f} ({summary['total_pnl_pct']:+.1f}%)[/{pnl_color}]\n"
+            f"🎯 Win Rate: {summary['win_rate']:.0f}%\n"
+            f"📝 Total Trades: {summary['trades_count']}",
+            title="📊 Portfolio Summary",
+            border_style="blue",
+        )
+    )
+
+    # Positions table
+    if account.positions:
+        table = Table(title="📈 Open Positions", show_header=True)
+        table.add_column("Symbol", style="cyan")
+        table.add_column("Lots", justify="right")
+        table.add_column("Avg Price", justify="right")
+        table.add_column("Current", justify="right")
+        table.add_column("Value", justify="right")
+        table.add_column("P&L", justify="right")
+        table.add_column("P&L %", justify="right")
+
+        for symbol, pos in account.positions.items():
+            pnl_style = "green" if pos.unrealized_pnl >= 0 else "red"
+            table.add_row(
+                symbol,
+                str(pos.lots),
+                f"Rp {pos.avg_price:,.0f}",
+                f"Rp {pos.current_price:,.0f}",
+                f"Rp {pos.current_value:,.0f}",
+                f"[{pnl_style}]Rp {pos.unrealized_pnl:,.0f}[/{pnl_style}]",
+                f"[{pnl_style}]{pos.unrealized_pnl_pct:+.1f}%[/{pnl_style}]",
+            )
+
+        console.print(table)
+
+        # Check alerts
+        warnings = account.check_stop_losses(prices)
+        targets = account.check_targets(prices)
+        for msg in warnings + targets:
+            console.print(msg)
+    else:
+        console.print("\n[dim]Belum ada posisi. Mulai dengan: stockai paper buy BBRI 2[/dim]")
+
+
+@paper_app.command("history")
+def paper_history(
+    limit: int = typer.Option(10, "--limit", "-l", help="Number of trades to show"),
+) -> None:
+    """View paper trading history.
+
+    Examples:
+        stockai paper history
+        stockai paper history --limit 20
+    """
+    from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
+
+    path = get_default_paper_path()
+    if not path.exists():
+        console.print("[red]Paper account belum dibuat.[/red]")
+        raise typer.Exit(1)
+
+    account = PaperTradingAccount.load(path)
+
+    if not account.trades:
+        console.print("[dim]Belum ada trade history.[/dim]")
+        return
+
+    table = Table(title="📜 Trade History", show_header=True)
+    table.add_column("Date", style="dim")
+    table.add_column("Action")
+    table.add_column("Symbol", style="cyan")
+    table.add_column("Lots", justify="right")
+    table.add_column("Price", justify="right")
+    table.add_column("Value", justify="right")
+    table.add_column("Fee", justify="right", style="dim")
+
+    for trade in reversed(account.trades[-limit:]):
+        action_style = "green" if trade.action.value == "BUY" else "red"
+        table.add_row(
+            trade.timestamp.strftime("%Y-%m-%d %H:%M"),
+            f"[{action_style}]{trade.action.value}[/{action_style}]",
+            trade.symbol,
+            str(trade.lots),
+            f"Rp {trade.price:,.0f}",
+            f"Rp {trade.total_value:,.0f}",
+            f"Rp {trade.fee:,.0f}",
+        )
+
+    console.print(table)
+
+
+@paper_app.command("reset")
+def paper_reset(
+    capital: int = typer.Option(10_000_000, "--capital", "-c", help="New starting capital"),
+) -> None:
+    """Reset paper trading account.
+
+    Clears all positions and history, starts fresh.
+
+    Examples:
+        stockai paper reset
+        stockai paper reset --capital 5000000
+    """
+    from stockai.tutorial.paper_trading import create_paper_account, get_default_paper_path
+
+    if not typer.confirm("Reset semua posisi dan history?"):
+        console.print("[yellow]Dibatalkan.[/yellow]")
+        raise typer.Exit(0)
+
+    path = get_default_paper_path()
+    account = create_paper_account(capital=capital, save_path=path)
+
+    console.print(f"[green]Paper account reset dengan modal Rp {capital:,}[/green]")
+
+
 if __name__ == "__main__":
     app()
