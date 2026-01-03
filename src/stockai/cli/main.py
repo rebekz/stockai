@@ -584,6 +584,338 @@ def _display_prediction_result(
 
 
 @app.command()
+def suggest(
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index to scan (IDX30, LQ45)"),
+    min_score: float = typer.Option(0.6, "--min-score", "-m", help="Minimum signal score (0-1)"),
+    top: int = typer.Option(10, "--top", "-t", help="Number of top suggestions"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed analysis"),
+) -> None:
+    """Find stocks with buy signals using technical analysis.
+
+    Scans index stocks and identifies those with bullish indicators
+    based on RSI, MACD, and Bollinger Bands analysis.
+
+    Examples:
+        stock suggest
+        stock suggest --index LQ45
+        stock suggest --min-score 0.7 --top 5
+    """
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+    import pandas as pd
+    import numpy as np
+
+    index = index.upper()
+    console.print(f"\n[bold]🔍 Scanning {index} for Buy Signals[/bold]\n")
+
+    # Get stock list
+    idx_source = IDXIndexSource()
+    if index == "IDX30":
+        stocks = idx_source.get_idx30_stocks()
+    elif index == "LQ45":
+        stocks = idx_source.get_lq45_stocks()
+    else:
+        console.print(f"[red]Error:[/red] Unknown index {index}. Use IDX30 or LQ45.")
+        raise typer.Exit(1)
+
+    if not stocks:
+        console.print(f"[red]Error:[/red] Could not fetch {index} stocks")
+        raise typer.Exit(1)
+
+    yahoo = YahooFinanceSource()
+    results = []
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        console=console,
+    ) as progress:
+        task = progress.add_task(f"Analyzing {len(stocks)} stocks...", total=len(stocks))
+
+        for stock in stocks:
+            symbol = stock["symbol"]
+            try:
+                # Get price history
+                df = yahoo.get_price_history(symbol, period="3mo")
+                if df.empty or len(df) < 20:
+                    progress.advance(task)
+                    continue
+
+                # Calculate technical indicators
+                signals = _calculate_buy_signals(df)
+                signals["symbol"] = symbol
+                signals["name"] = stock.get("name", symbol)
+
+                if signals["score"] >= min_score:
+                    results.append(signals)
+
+            except Exception as e:
+                if verbose:
+                    console.print(f"[dim]Skipping {symbol}: {e}[/dim]")
+
+            progress.advance(task)
+
+    # Sort by score and take top N
+    results = sorted(results, key=lambda x: x["score"], reverse=True)[:top]
+
+    if not results:
+        console.print(f"[yellow]No stocks found with signal score >= {min_score:.0%}[/yellow]")
+        console.print("[dim]Try lowering --min-score or using a different index[/dim]")
+        return
+
+    # Display results
+    console.print(f"\n[bold green]📈 Top {len(results)} Buy Signals[/bold green]\n")
+
+    table = Table(show_header=True, title=f"🎯 {index} Buy Suggestions")
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Symbol", style="cyan")
+    table.add_column("Score", justify="center")
+    table.add_column("RSI", justify="right")
+    table.add_column("MACD", justify="center")
+    table.add_column("BB", justify="center")
+    table.add_column("Price", justify="right")
+    table.add_column("Signal", justify="center")
+
+    for i, r in enumerate(results, 1):
+        # Score color
+        score = r["score"]
+        if score >= 0.8:
+            score_str = f"[green]{score:.0%}[/green]"
+            signal = "[bold green]STRONG BUY[/bold green]"
+        elif score >= 0.6:
+            score_str = f"[yellow]{score:.0%}[/yellow]"
+            signal = "[yellow]BUY[/yellow]"
+        else:
+            score_str = f"[dim]{score:.0%}[/dim]"
+            signal = "[dim]HOLD[/dim]"
+
+        # RSI signal
+        rsi = r.get("rsi", 50)
+        if rsi < 30:
+            rsi_str = f"[green]{rsi:.0f}[/green]"
+        elif rsi > 70:
+            rsi_str = f"[red]{rsi:.0f}[/red]"
+        else:
+            rsi_str = f"{rsi:.0f}"
+
+        # MACD signal
+        macd_signal = r.get("macd_signal", "NEUTRAL")
+        if macd_signal == "BULLISH":
+            macd_str = "[green]↑[/green]"
+        elif macd_signal == "BEARISH":
+            macd_str = "[red]↓[/red]"
+        else:
+            macd_str = "[dim]−[/dim]"
+
+        # BB signal
+        bb_signal = r.get("bb_signal", "NEUTRAL")
+        if bb_signal == "OVERSOLD":
+            bb_str = "[green]↑[/green]"
+        elif bb_signal == "OVERBOUGHT":
+            bb_str = "[red]↓[/red]"
+        else:
+            bb_str = "[dim]−[/dim]"
+
+        price = r.get("current_price", 0)
+        price_str = f"Rp {price:,.0f}" if price else "-"
+
+        table.add_row(
+            str(i),
+            r["symbol"],
+            score_str,
+            rsi_str,
+            macd_str,
+            bb_str,
+            price_str,
+            signal,
+        )
+
+    console.print(table)
+
+    # Legend
+    console.print("\n[dim]Legend: RSI (Relative Strength Index), MACD (Moving Average Convergence Divergence), BB (Bollinger Bands)[/dim]")
+    console.print("[dim]↑ = Bullish signal, ↓ = Bearish signal, − = Neutral[/dim]")
+
+    # Detailed analysis for top picks
+    if verbose and results:
+        console.print("\n[bold]📊 Detailed Analysis[/bold]")
+        for r in results[:3]:
+            _display_stock_signals(r)
+
+
+def _calculate_buy_signals(df: "pd.DataFrame") -> dict:
+    """Calculate technical buy signals for a stock.
+
+    Returns dict with score and individual indicator signals.
+    """
+    import numpy as np
+
+    result = {
+        "score": 0.0,
+        "rsi": 50,
+        "macd_signal": "NEUTRAL",
+        "bb_signal": "NEUTRAL",
+        "current_price": 0,
+        "signals": [],
+    }
+
+    if len(df) < 20:
+        return result
+
+    close = df["close"].values
+    result["current_price"] = float(close[-1])
+
+    signals_count = 0
+    total_weight = 0
+
+    # 1. RSI (14-day)
+    try:
+        delta = np.diff(close)
+        gain = np.where(delta > 0, delta, 0)
+        loss = np.where(delta < 0, -delta, 0)
+
+        avg_gain = np.convolve(gain, np.ones(14)/14, mode='valid')
+        avg_loss = np.convolve(loss, np.ones(14)/14, mode='valid')
+
+        if len(avg_gain) > 0 and len(avg_loss) > 0 and avg_loss[-1] != 0:
+            rs = avg_gain[-1] / avg_loss[-1]
+            rsi = 100 - (100 / (1 + rs))
+        else:
+            rsi = 50
+
+        result["rsi"] = float(rsi)
+
+        # RSI signal scoring
+        if rsi < 30:  # Oversold - bullish
+            signals_count += 1.0
+            result["signals"].append("RSI oversold (<30)")
+        elif rsi < 40:  # Near oversold - slightly bullish
+            signals_count += 0.5
+            result["signals"].append("RSI near oversold")
+        elif rsi > 70:  # Overbought - bearish
+            signals_count -= 0.5
+        total_weight += 1.0
+    except Exception:
+        pass
+
+    # 2. MACD
+    try:
+        ema12 = _ema(close, 12)
+        ema26 = _ema(close, 26)
+
+        if len(ema12) > 0 and len(ema26) > 0:
+            macd_line = ema12[-1] - ema26[-1]
+            macd_prev = ema12[-2] - ema26[-2] if len(ema12) > 1 else macd_line
+
+            # Signal line (9-day EMA of MACD)
+            macd_values = ema12[-9:] - ema26[-9:] if len(ema12) >= 9 else np.array([macd_line])
+            signal_line = np.mean(macd_values)
+
+            # MACD crossover detection
+            if macd_line > signal_line and macd_prev <= signal_line:
+                result["macd_signal"] = "BULLISH"
+                signals_count += 1.0
+                result["signals"].append("MACD bullish crossover")
+            elif macd_line > signal_line:
+                result["macd_signal"] = "BULLISH"
+                signals_count += 0.5
+            elif macd_line < signal_line and macd_prev >= signal_line:
+                result["macd_signal"] = "BEARISH"
+                signals_count -= 0.5
+            elif macd_line < signal_line:
+                result["macd_signal"] = "BEARISH"
+                signals_count -= 0.25
+
+            total_weight += 1.0
+    except Exception:
+        pass
+
+    # 3. Bollinger Bands
+    try:
+        sma20 = np.convolve(close, np.ones(20)/20, mode='valid')
+        if len(sma20) > 0:
+            std20 = np.std(close[-20:])
+            upper_band = sma20[-1] + (2 * std20)
+            lower_band = sma20[-1] - (2 * std20)
+
+            current = close[-1]
+
+            if current <= lower_band:
+                result["bb_signal"] = "OVERSOLD"
+                signals_count += 1.0
+                result["signals"].append("Price at lower Bollinger Band")
+            elif current >= upper_band:
+                result["bb_signal"] = "OVERBOUGHT"
+                signals_count -= 0.5
+            else:
+                # Position within bands
+                bb_pos = (current - lower_band) / (upper_band - lower_band)
+                if bb_pos < 0.3:
+                    signals_count += 0.5
+                    result["signals"].append("Price near lower Bollinger Band")
+
+            total_weight += 1.0
+    except Exception:
+        pass
+
+    # 4. Price momentum (optional bonus)
+    try:
+        if len(close) >= 5:
+            momentum = (close[-1] - close[-5]) / close[-5]
+            if -0.05 < momentum < 0:  # Small recent dip - potential reversal
+                signals_count += 0.3
+            elif momentum > 0.02:  # Positive momentum
+                signals_count += 0.2
+    except Exception:
+        pass
+
+    # Calculate final score (normalized 0-1)
+    if total_weight > 0:
+        raw_score = (signals_count / total_weight + 1) / 2  # Normalize to 0-1
+        result["score"] = max(0, min(1, raw_score))
+
+    return result
+
+
+def _ema(data: "np.ndarray", period: int) -> "np.ndarray":
+    """Calculate Exponential Moving Average."""
+    import numpy as np
+    if len(data) < period:
+        return np.array([])
+    multiplier = 2 / (period + 1)
+    ema = np.zeros(len(data))
+    ema[period-1] = np.mean(data[:period])
+    for i in range(period, len(data)):
+        ema[i] = (data[i] - ema[i-1]) * multiplier + ema[i-1]
+    return ema[period-1:]
+
+
+def _display_stock_signals(signals: dict) -> None:
+    """Display detailed signal analysis for a stock."""
+    symbol = signals["symbol"]
+    name = signals.get("name", symbol)
+
+    lines = []
+    lines.append(f"[bold cyan]Symbol:[/bold cyan] {symbol} ({name})")
+    lines.append(f"[bold cyan]Price:[/bold cyan] Rp {signals.get('current_price', 0):,.0f}")
+    lines.append(f"[bold cyan]Overall Score:[/bold cyan] {signals['score']:.0%}")
+    lines.append("")
+    lines.append("[bold]Indicators:[/bold]")
+    lines.append(f"  • RSI: {signals.get('rsi', 50):.1f}")
+    lines.append(f"  • MACD: {signals.get('macd_signal', 'NEUTRAL')}")
+    lines.append(f"  • Bollinger: {signals.get('bb_signal', 'NEUTRAL')}")
+
+    if signals.get("signals"):
+        lines.append("")
+        lines.append("[bold]Buy Signals:[/bold]")
+        for sig in signals["signals"]:
+            lines.append(f"  [green]✓[/green] {sig}")
+
+    console.print(Panel("\n".join(lines), title=f"📊 {symbol}", border_style="blue"))
+
+
+@app.command()
 def train(
     symbol: str = typer.Option(None, "--symbol", "-s", help="Train on specific stock (default: IDX30)"),
     horizon: int = typer.Option(3, "--horizon", "-h", help="Prediction horizon in days"),
@@ -1278,7 +1610,7 @@ def sentiment_analyze(
         stock sentiment analyze TLKM --days 14
     """
     from rich.progress import Progress, SpinnerColumn, TextColumn
-    from stockai.core.sentiment import SentimentAnalyzer, NewsAggregator
+    from stockai.core.sentiment import get_sentiment_analyzer, NewsAggregator
 
     symbol = symbol.upper()
     console.print(f"\n[bold]🎯 Analyzing sentiment for {symbol}[/bold]\n")
@@ -1302,8 +1634,8 @@ def sentiment_analyze(
 
         progress.update(task, description="Analyzing sentiment...")
 
-        # Analyze sentiment
-        analyzer = SentimentAnalyzer()
+        # Analyze sentiment (uses Gemini if available, otherwise fallback)
+        analyzer = get_sentiment_analyzer()
         aggregated = analyzer.aggregate_sentiment(articles, symbol)
 
     # Display results
@@ -1410,7 +1742,7 @@ def sentiment_market() -> None:
         stock sentiment market
     """
     from rich.progress import Progress, SpinnerColumn, TextColumn
-    from stockai.core.sentiment import SentimentAnalyzer, NewsAggregator
+    from stockai.core.sentiment import get_sentiment_analyzer, NewsAggregator
 
     console.print(f"\n[bold]🏛️ Analyzing Market Sentiment (IHSG)...[/bold]\n")
 
@@ -1431,7 +1763,8 @@ def sentiment_market() -> None:
 
         progress.update(task, description="Analyzing sentiment...")
 
-        analyzer = SentimentAnalyzer()
+        # Uses Gemini if available, otherwise fallback
+        analyzer = get_sentiment_analyzer()
         aggregated = analyzer.aggregate_sentiment(articles, "IHSG")
 
     # Display

@@ -553,8 +553,8 @@ class TestSentimentCLI:
         self.app = app
 
     @patch('stockai.core.sentiment.news.NewsAggregator.fetch_all')
-    @patch('stockai.core.sentiment.analyzer.SentimentAnalyzer.aggregate_sentiment')
-    def test_sentiment_analyze_command(self, mock_aggregate, mock_fetch):
+    @patch('stockai.core.sentiment.get_sentiment_analyzer')
+    def test_sentiment_analyze_command(self, mock_get_analyzer, mock_fetch):
         """Test sentiment analyze command."""
         # Setup mocks
         mock_fetch.return_value = [
@@ -567,7 +567,10 @@ class TestSentimentCLI:
                 symbol="BBCA",
             )
         ]
-        mock_aggregate.return_value = AggregatedSentiment(
+
+        # Mock the analyzer returned by get_sentiment_analyzer
+        mock_analyzer = MagicMock()
+        mock_analyzer.aggregate_sentiment.return_value = AggregatedSentiment(
             symbol="BBCA",
             article_count=1,
             avg_sentiment_score=0.3,
@@ -577,6 +580,7 @@ class TestSentimentCLI:
             confidence=0.7,
             dominant_label=SentimentLabel.BULLISH,
         )
+        mock_get_analyzer.return_value = mock_analyzer
 
         result = self.runner.invoke(self.app, ["sentiment", "analyze", "BBCA"])
 
@@ -623,8 +627,8 @@ class TestSentimentCLI:
         assert "News Title 2" in result.stdout
 
     @patch('stockai.core.sentiment.news.NewsAggregator.get_market_news')
-    @patch('stockai.core.sentiment.analyzer.SentimentAnalyzer.aggregate_sentiment')
-    def test_sentiment_market_command(self, mock_aggregate, mock_fetch):
+    @patch('stockai.core.sentiment.get_sentiment_analyzer')
+    def test_sentiment_market_command(self, mock_get_analyzer, mock_fetch):
         """Test sentiment market command."""
         mock_fetch.return_value = [
             NewsArticle(
@@ -635,7 +639,10 @@ class TestSentimentCLI:
                 symbol="IHSG",
             )
         ]
-        mock_aggregate.return_value = AggregatedSentiment(
+
+        # Mock the analyzer returned by get_sentiment_analyzer
+        mock_analyzer = MagicMock()
+        mock_analyzer.aggregate_sentiment.return_value = AggregatedSentiment(
             symbol="IHSG",
             article_count=1,
             avg_sentiment_score=0.2,
@@ -645,6 +652,7 @@ class TestSentimentCLI:
             confidence=0.6,
             dominant_label=SentimentLabel.BULLISH,
         )
+        mock_get_analyzer.return_value = mock_analyzer
 
         result = self.runner.invoke(self.app, ["sentiment", "market"])
 

@@ -259,12 +259,20 @@ class NewsAggregator:
         all_articles.extend(google_articles)
         all_articles.extend(yahoo_articles)
 
-        # Filter by date
-        cutoff = datetime.utcnow() - timedelta(days=days_back)
-        filtered = [
-            a for a in all_articles
-            if a.published_at is None or a.published_at > cutoff
-        ]
+        # Filter by date (use timezone-aware cutoff for comparison)
+        from datetime import timezone
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+        filtered = []
+        for a in all_articles:
+            if a.published_at is None:
+                filtered.append(a)
+            else:
+                # Make naive datetime timezone-aware for comparison
+                pub_dt = a.published_at
+                if pub_dt.tzinfo is None:
+                    pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+                if pub_dt > cutoff:
+                    filtered.append(a)
 
         # Deduplicate by title similarity
         seen_titles = set()
@@ -278,10 +286,15 @@ class NewsAggregator:
                 unique_articles.append(article)
 
         # Sort by date (newest first)
-        unique_articles.sort(
-            key=lambda a: a.published_at or datetime.min,
-            reverse=True,
-        )
+        def get_sort_date(article):
+            if article.published_at is None:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            dt = article.published_at
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+
+        unique_articles.sort(key=get_sort_date, reverse=True)
 
         # Limit total
         result = unique_articles[:max_articles]
