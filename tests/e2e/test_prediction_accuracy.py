@@ -1891,5 +1891,237 @@ class TestPredictShowAccuracyOption(TestPredictionsCLI):
         assert "Historical Accuracy for" not in result.stdout
 
 
+class TestPredictEndpointWithHistoricalAccuracy(TestPredictionAccuracyAPI):
+    """Tests for GET /api/predict/{symbol} endpoint with historical accuracy."""
+
+    def test_predict_endpoint_includes_historical_accuracy_field(self):
+        """Predict endpoint response should include historical_accuracy field."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, symbol="BBRI")
+
+        # Mock the EnsemblePredictor and YahooFinanceSource
+        with patch("stockai.web.routes.YahooFinanceSource") as mock_yahoo, \
+             patch("stockai.web.routes.EnsemblePredictor") as mock_predictor, \
+             patch("stockai.web.routes.get_settings") as mock_settings:
+            # Mock Yahoo to return enough data
+            mock_df = MagicMock()
+            mock_df.empty = False
+            mock_df.__len__ = lambda s: 100
+            mock_yahoo.return_value.get_price_history.return_value = mock_df
+
+            # Mock settings
+            mock_settings.return_value.project_root = MagicMock()
+            mock_settings.return_value.project_root.__truediv__ = lambda s, x: MagicMock()
+
+            # Mock predictor
+            mock_instance = MagicMock()
+            mock_instance.load_models.return_value = {"xgboost": True, "lstm": True}
+            mock_instance.predict_with_sentiment.return_value = {
+                "direction": "UP",
+                "probability": 0.7,
+                "confidence": 0.75,
+            }
+            mock_predictor.return_value = mock_instance
+
+            response = self.client.get("/api/predict/BBRI")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "historical_accuracy" in data
+
+    def test_predict_endpoint_no_historical_predictions(self):
+        """Should return None for historical_accuracy when stock has no predictions."""
+        with get_db() as session:
+            self._create_test_stock(session, symbol="NEWX")
+
+        # Mock the EnsemblePredictor and YahooFinanceSource
+        with patch("stockai.web.routes.YahooFinanceSource") as mock_yahoo, \
+             patch("stockai.web.routes.EnsemblePredictor") as mock_predictor, \
+             patch("stockai.web.routes.get_settings") as mock_settings:
+            # Mock Yahoo to return enough data
+            mock_df = MagicMock()
+            mock_df.empty = False
+            mock_df.__len__ = lambda s: 100
+            mock_yahoo.return_value.get_price_history.return_value = mock_df
+
+            # Mock settings
+            mock_settings.return_value.project_root = MagicMock()
+            mock_settings.return_value.project_root.__truediv__ = lambda s, x: MagicMock()
+
+            # Mock predictor
+            mock_instance = MagicMock()
+            mock_instance.load_models.return_value = {"xgboost": True, "lstm": True}
+            mock_instance.predict_with_sentiment.return_value = {
+                "direction": "UP",
+                "probability": 0.7,
+                "confidence": 0.75,
+            }
+            mock_predictor.return_value = mock_instance
+
+            response = self.client.get("/api/predict/NEWX")
+
+        assert response.status_code == 200
+        data = response.json()
+        # Should return None for stocks with no predictions
+        assert data["historical_accuracy"] is None
+
+    def test_predict_endpoint_with_historical_predictions(self):
+        """Should return accuracy metrics when stock has historical predictions."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, symbol="ACCX")
+            # 3 correct, 2 wrong = 60% accuracy
+            for _ in range(3):
+                self._create_evaluated_prediction(session, stock, is_correct=True)
+            for _ in range(2):
+                self._create_evaluated_prediction(session, stock, is_correct=False)
+
+        # Mock the EnsemblePredictor and YahooFinanceSource
+        with patch("stockai.web.routes.YahooFinanceSource") as mock_yahoo, \
+             patch("stockai.web.routes.EnsemblePredictor") as mock_predictor, \
+             patch("stockai.web.routes.get_settings") as mock_settings:
+            # Mock Yahoo to return enough data
+            mock_df = MagicMock()
+            mock_df.empty = False
+            mock_df.__len__ = lambda s: 100
+            mock_yahoo.return_value.get_price_history.return_value = mock_df
+
+            # Mock settings
+            mock_settings.return_value.project_root = MagicMock()
+            mock_settings.return_value.project_root.__truediv__ = lambda s, x: MagicMock()
+
+            # Mock predictor
+            mock_instance = MagicMock()
+            mock_instance.load_models.return_value = {"xgboost": True, "lstm": True}
+            mock_instance.predict_with_sentiment.return_value = {
+                "direction": "UP",
+                "probability": 0.7,
+                "confidence": 0.75,
+            }
+            mock_predictor.return_value = mock_instance
+
+            response = self.client.get("/api/predict/ACCX")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["historical_accuracy"] is not None
+        assert data["historical_accuracy"]["total_predictions"] == 5
+        assert data["historical_accuracy"]["correct_predictions"] == 3
+        assert data["historical_accuracy"]["accuracy_rate"] == 60.0
+
+    def test_predict_endpoint_historical_accuracy_includes_direction_breakdown(self):
+        """Historical accuracy should include direction breakdown."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, symbol="DIRX")
+            self._create_evaluated_prediction(session, stock, direction="UP", is_correct=True)
+            self._create_evaluated_prediction(session, stock, direction="DOWN", is_correct=False)
+
+        # Mock the EnsemblePredictor and YahooFinanceSource
+        with patch("stockai.web.routes.YahooFinanceSource") as mock_yahoo, \
+             patch("stockai.web.routes.EnsemblePredictor") as mock_predictor, \
+             patch("stockai.web.routes.get_settings") as mock_settings:
+            # Mock Yahoo to return enough data
+            mock_df = MagicMock()
+            mock_df.empty = False
+            mock_df.__len__ = lambda s: 100
+            mock_yahoo.return_value.get_price_history.return_value = mock_df
+
+            # Mock settings
+            mock_settings.return_value.project_root = MagicMock()
+            mock_settings.return_value.project_root.__truediv__ = lambda s, x: MagicMock()
+
+            # Mock predictor
+            mock_instance = MagicMock()
+            mock_instance.load_models.return_value = {"xgboost": True, "lstm": True}
+            mock_instance.predict_with_sentiment.return_value = {
+                "direction": "UP",
+                "probability": 0.7,
+                "confidence": 0.75,
+            }
+            mock_predictor.return_value = mock_instance
+
+            response = self.client.get("/api/predict/DIRX")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "by_direction" in data["historical_accuracy"]
+        assert "UP" in data["historical_accuracy"]["by_direction"]
+        assert "DOWN" in data["historical_accuracy"]["by_direction"]
+
+    def test_predict_endpoint_historical_accuracy_includes_confidence_breakdown(self):
+        """Historical accuracy should include confidence breakdown."""
+        with get_db() as session:
+            stock = self._create_test_stock(session, symbol="CNFX")
+            # HIGH confidence prediction
+            self._create_evaluated_prediction(session, stock, confidence=0.8, is_correct=True)
+            # LOW confidence prediction
+            self._create_evaluated_prediction(session, stock, confidence=0.3, is_correct=False)
+
+        # Mock the EnsemblePredictor and YahooFinanceSource
+        with patch("stockai.web.routes.YahooFinanceSource") as mock_yahoo, \
+             patch("stockai.web.routes.EnsemblePredictor") as mock_predictor, \
+             patch("stockai.web.routes.get_settings") as mock_settings:
+            # Mock Yahoo to return enough data
+            mock_df = MagicMock()
+            mock_df.empty = False
+            mock_df.__len__ = lambda s: 100
+            mock_yahoo.return_value.get_price_history.return_value = mock_df
+
+            # Mock settings
+            mock_settings.return_value.project_root = MagicMock()
+            mock_settings.return_value.project_root.__truediv__ = lambda s, x: MagicMock()
+
+            # Mock predictor
+            mock_instance = MagicMock()
+            mock_instance.load_models.return_value = {"xgboost": True, "lstm": True}
+            mock_instance.predict_with_sentiment.return_value = {
+                "direction": "UP",
+                "probability": 0.7,
+                "confidence": 0.75,
+            }
+            mock_predictor.return_value = mock_instance
+
+            response = self.client.get("/api/predict/CNFX")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "by_confidence" in data["historical_accuracy"]
+        assert "HIGH" in data["historical_accuracy"]["by_confidence"]
+        assert "LOW" in data["historical_accuracy"]["by_confidence"]
+
+    def test_predict_endpoint_no_models_includes_accuracy_field(self):
+        """Response should include historical_accuracy field even when no models available."""
+        with get_db() as session:
+            self._create_test_stock(session, symbol="NOMX")
+
+        # Mock the EnsemblePredictor and YahooFinanceSource
+        with patch("stockai.web.routes.YahooFinanceSource") as mock_yahoo, \
+             patch("stockai.web.routes.EnsemblePredictor") as mock_predictor, \
+             patch("stockai.web.routes.get_settings") as mock_settings:
+            # Mock Yahoo to return enough data
+            mock_df = MagicMock()
+            mock_df.empty = False
+            mock_df.__len__ = lambda s: 100
+            mock_yahoo.return_value.get_price_history.return_value = mock_df
+
+            # Mock settings
+            mock_settings.return_value.project_root = MagicMock()
+            mock_settings.return_value.project_root.__truediv__ = lambda s, x: MagicMock()
+
+            # Mock predictor - no models loaded
+            mock_instance = MagicMock()
+            mock_instance.load_models.return_value = {"xgboost": False, "lstm": False}
+            mock_predictor.return_value = mock_instance
+
+            response = self.client.get("/api/predict/NOMX")
+
+        assert response.status_code == 200
+        data = response.json()
+        # Should include historical_accuracy field
+        assert "historical_accuracy" in data
+        assert data["historical_accuracy"] is None
+        assert data["prediction"] is None
+        assert "No trained models" in data["message"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

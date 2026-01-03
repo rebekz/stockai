@@ -181,9 +181,13 @@ async def get_sentiment(
 
 @api_router.get("/predict/{symbol}")
 async def get_prediction(symbol: str) -> dict:
-    """Get stock prediction."""
+    """Get stock prediction with historical accuracy.
+
+    Returns a prediction for the stock along with historical accuracy
+    metrics if available.
+    """
     from stockai.config import get_settings
-    from stockai.core.predictor import EnsemblePredictor
+    from stockai.core.predictor import EnsemblePredictor, PredictionAccuracyTracker
 
     settings = get_settings()
     yahoo = YahooFinanceSource()
@@ -207,14 +211,34 @@ async def get_prediction(symbol: str) -> dict:
             "symbol": symbol.upper(),
             "prediction": None,
             "message": "No trained models available",
+            "historical_accuracy": None,
         }
 
     # Get prediction with sentiment
     result = ensemble.predict_with_sentiment(df, symbol.upper())
 
+    # Get historical accuracy for this stock
+    init_database()
+    tracker = PredictionAccuracyTracker()
+    accuracy_data = tracker.get_stock_accuracy(symbol.upper())
+
+    # Format historical accuracy for response
+    # Stocks with no predictions or not found will have a "message" key
+    if "message" in accuracy_data:
+        historical_accuracy = None
+    else:
+        historical_accuracy = {
+            "total_predictions": accuracy_data.get("total_predictions", 0),
+            "correct_predictions": accuracy_data.get("correct_predictions", 0),
+            "accuracy_rate": accuracy_data.get("accuracy_rate", 0.0),
+            "by_direction": accuracy_data.get("by_direction"),
+            "by_confidence": accuracy_data.get("by_confidence"),
+        }
+
     return {
         "symbol": symbol.upper(),
         "prediction": result,
+        "historical_accuracy": historical_accuracy,
     }
 
 
