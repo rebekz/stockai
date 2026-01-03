@@ -21,7 +21,7 @@ class TestAgentConfig:
 
         config = AgentConfig()
 
-        assert config.model == "gemini/gemini-2.0-flash"
+        assert config.model == "gemini/gemini-3-flash-preview"
         assert config.temperature == 0.3
         assert config.max_tokens == 4096
         assert config.max_iterations == 3
