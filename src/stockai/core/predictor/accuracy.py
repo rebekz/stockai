@@ -351,3 +351,105 @@ class PredictionAccuracyTracker:
                 return _execute(session)
         else:
             return _execute(self._session)
+
+    def get_accuracy_metrics(self) -> dict[str, Any]:
+        """Get overall prediction accuracy metrics.
+
+        Calculates accuracy statistics across all predictions that have
+        been evaluated (is_correct is not null).
+
+        Returns:
+            Dictionary with accuracy metrics including:
+            - total_predictions: Total number of evaluated predictions
+            - correct_predictions: Number of correct predictions
+            - accuracy_rate: Percentage of correct predictions (0-100)
+            - by_direction: Accuracy breakdown by predicted direction (UP/DOWN/NEUTRAL)
+            - by_confidence: Accuracy breakdown by confidence level (HIGH/MEDIUM/LOW)
+        """
+
+        def _execute(session: Session) -> dict:
+            # Get all evaluated predictions (where is_correct is not null)
+            predictions = (
+                session.query(Prediction)
+                .filter(Prediction.is_correct.isnot(None))
+                .all()
+            )
+
+            # Handle zero predictions gracefully
+            if not predictions:
+                return {
+                    "total_predictions": 0,
+                    "correct_predictions": 0,
+                    "accuracy_rate": 0.0,
+                    "by_direction": {
+                        "UP": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                        "DOWN": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                        "NEUTRAL": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                    },
+                    "by_confidence": {
+                        "HIGH": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                        "MEDIUM": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                        "LOW": {"total": 0, "correct": 0, "accuracy_rate": 0.0},
+                    },
+                    "message": "No evaluated predictions found",
+                }
+
+            # Calculate overall metrics
+            total_predictions = len(predictions)
+            correct_predictions = sum(1 for p in predictions if p.is_correct)
+            accuracy_rate = (correct_predictions / total_predictions) * 100
+
+            # Calculate accuracy by direction (UP/DOWN/NEUTRAL)
+            direction_stats = {}
+            for direction in ["UP", "DOWN", "NEUTRAL"]:
+                direction_preds = [p for p in predictions if p.direction == direction]
+                total = len(direction_preds)
+                correct = sum(1 for p in direction_preds if p.is_correct)
+                direction_stats[direction] = {
+                    "total": total,
+                    "correct": correct,
+                    "accuracy_rate": round((correct / total * 100), 2) if total > 0 else 0.0,
+                }
+
+            # Calculate accuracy by confidence level
+            # HIGH: confidence >= 0.7
+            # MEDIUM: 0.4 <= confidence < 0.7
+            # LOW: confidence < 0.4
+            confidence_stats = {
+                "HIGH": {"total": 0, "correct": 0},
+                "MEDIUM": {"total": 0, "correct": 0},
+                "LOW": {"total": 0, "correct": 0},
+            }
+
+            for p in predictions:
+                confidence = p.confidence or 0
+                if confidence >= 0.7:
+                    level = "HIGH"
+                elif confidence >= 0.4:
+                    level = "MEDIUM"
+                else:
+                    level = "LOW"
+
+                confidence_stats[level]["total"] += 1
+                if p.is_correct:
+                    confidence_stats[level]["correct"] += 1
+
+            # Calculate accuracy rates for confidence levels
+            for level, stats in confidence_stats.items():
+                total = stats["total"]
+                correct = stats["correct"]
+                stats["accuracy_rate"] = round((correct / total * 100), 2) if total > 0 else 0.0
+
+            return {
+                "total_predictions": total_predictions,
+                "correct_predictions": correct_predictions,
+                "accuracy_rate": round(accuracy_rate, 2),
+                "by_direction": direction_stats,
+                "by_confidence": confidence_stats,
+            }
+
+        if self._use_context_manager:
+            with session_scope() as session:
+                return _execute(session)
+        else:
+            return _execute(self._session)
