@@ -11,6 +11,8 @@ from fastapi import APIRouter, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from stockai import __version__
+from stockai.config import get_settings
+from stockai.core.predictor import EnsemblePredictor, PredictionAccuracyTracker
 from stockai.data.cache import async_cached
 from stockai.data.database import init_database
 from stockai.data.sources.yahoo import YahooFinanceSource
@@ -204,13 +206,13 @@ async def get_sentiment(
 @api_router.get("/predict/{symbol}")
 @async_cached("prediction")
 async def get_prediction(symbol: str) -> dict:
-    """Get stock prediction."""
+    """Get stock prediction with historical accuracy.
+
+    Returns a prediction for the stock along with historical accuracy
+    metrics if available.
+    """
     # Normalize symbol for consistent cache keys
     symbol = symbol.upper()
-
-    from stockai.config import get_settings
-    from stockai.core.predictor import EnsemblePredictor
-
     settings = get_settings()
     yahoo = YahooFinanceSource()
 
@@ -233,14 +235,34 @@ async def get_prediction(symbol: str) -> dict:
             "symbol": symbol,
             "prediction": None,
             "message": "No trained models available",
+            "historical_accuracy": None,
         }
 
     # Get prediction with sentiment
     result = ensemble.predict_with_sentiment(df, symbol)
 
+    # Get historical accuracy for this stock
+    init_database()
+    tracker = PredictionAccuracyTracker()
+    accuracy_data = tracker.get_stock_accuracy(symbol.upper())
+
+    # Format historical accuracy for response
+    # Stocks with no predictions or not found will have a "message" key
+    if "message" in accuracy_data:
+        historical_accuracy = None
+    else:
+        historical_accuracy = {
+            "total_predictions": accuracy_data.get("total_predictions", 0),
+            "correct_predictions": accuracy_data.get("correct_predictions", 0),
+            "accuracy_rate": accuracy_data.get("accuracy_rate", 0.0),
+            "by_direction": accuracy_data.get("by_direction"),
+            "by_confidence": accuracy_data.get("by_confidence"),
+        }
+
     return {
         "symbol": symbol,
         "prediction": result,
+        "historical_accuracy": historical_accuracy,
     }
 
 
@@ -513,6 +535,78 @@ async def sentiment_page(request: Request):
     )
 
 
+@api_router.get("/predictions/accuracy")
+async def get_prediction_accuracy() -> dict:
+    """Get overall prediction accuracy metrics.
+
+    Returns accuracy statistics across all evaluated predictions including:
+    - Overall accuracy rate
+    - Accuracy breakdown by direction (UP/DOWN/NEUTRAL)
+    - Accuracy breakdown by confidence level (HIGH/MEDIUM/LOW)
+    """
+    init_database()
+
+    tracker = PredictionAccuracyTracker()
+    metrics = tracker.get_accuracy_metrics()
+
+    return metrics
+
+
+@api_router.get("/predictions/accuracy/{symbol}")
+async def get_stock_accuracy(symbol: str) -> dict:
+    """Get prediction accuracy metrics for a specific stock.
+
+    Returns stock-specific accuracy statistics including:
+    - Overall accuracy rate for the stock
+    - Accuracy breakdown by direction (UP/DOWN/NEUTRAL)
+    - Accuracy breakdown by confidence level (HIGH/MEDIUM/LOW)
+    - Recent predictions with outcomes
+    - Monthly accuracy trend
+
+    Args:
+        symbol: Stock ticker symbol (e.g., "BBRI.JK")
+
+    Raises:
+        HTTPException 404: If the stock is not found or has no predictions
+    """
+    init_database()
+
+    tracker = PredictionAccuracyTracker()
+    metrics = tracker.get_stock_accuracy(symbol.upper())
+
+    # Check if stock was not found or has no predictions
+    if "message" in metrics:
+        raise HTTPException(
+            status_code=404,
+            detail=metrics["message"],
+        )
+
+    return metrics
+
+
+@api_router.post("/predictions/backfill")
+async def backfill_prediction_accuracy() -> dict:
+    """Trigger accuracy backfill for past predictions.
+
+    Updates all predictions where target_date has passed but accuracy
+    has not yet been calculated. Fetches actual price data and determines
+    if each prediction was correct.
+
+    Returns:
+        Dictionary with backfill statistics:
+        - updated_count: Number of predictions successfully updated
+        - skipped_count: Number of predictions skipped (missing price data)
+        - error_count: Number of predictions that encountered errors
+        - total_pending: Total number of predictions that needed updating
+    """
+    init_database()
+
+    tracker = PredictionAccuracyTracker()
+    result = tracker.update_past_predictions()
+
+    return result
+
+
 @api_router.get("/export/{symbol}")
 async def export_stock_report(symbol: str) -> dict:
     """Generate stock analysis report data for PDF export.
@@ -587,9 +681,6 @@ async def export_stock_report(symbol: str) -> dict:
 
     # Get prediction (if models available)
     try:
-        from stockai.config import get_settings
-        from stockai.core.predictor import EnsemblePredictor
-
         settings = get_settings()
         model_dir = settings.project_root / "data" / "models"
 
