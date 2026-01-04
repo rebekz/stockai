@@ -12,7 +12,6 @@ Designed for **passive investors** with:
 ### Core Analysis
 - **Multi-Agent Trading System** - 7 specialized AI agents (Analyst, Researcher, Risk Manager, etc.)
 - **Technical Analysis** - RSI, MACD, Bollinger Bands, EMA crossovers
-- **ML Predictions** - XGBoost + LSTM ensemble for UP/DOWN signals
 - **Sentiment Analysis** - Gemini-powered Indonesian news analysis
 
 ### Quantitative Tools (Hedge Fund Style)
@@ -125,7 +124,6 @@ python -m stockai learn quiz
 | | `agents daily` | Daily trading recommendations |
 | | `agents signal` | Quick trading signals |
 | **Analysis** | `analyze SYMBOL` | AI-powered stock analysis |
-| | `predict SYMBOL` | ML price prediction |
 | | `sentiment SYMBOL` | News sentiment analysis |
 | | `info SYMBOL` | Stock information |
 | | `history SYMBOL` | Price history |
