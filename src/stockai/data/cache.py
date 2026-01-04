@@ -3,10 +3,11 @@
 Provides caching for API responses to reduce API calls and improve performance.
 """
 
+import functools
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Coroutine, TypeVar
 
 from stockai.config import get_settings
 from stockai.data.database import get_db, session_scope
@@ -238,9 +239,49 @@ def cached(prefix: str, ttl: int | None = None):
             ...
     """
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> T:
             cache = get_cache()
             key = cache._make_key(prefix, *args, *kwargs.values())
             return cache.get_or_set(key, lambda: func(*args, **kwargs), ttl)
+        return wrapper
+    return decorator
+
+
+def async_cached(prefix: str, ttl: int | None = None):
+    """Decorator to cache async function results.
+
+    Args:
+        prefix: Cache key prefix
+        ttl: Optional TTL in seconds
+
+    Example:
+        @async_cached("sentiment")
+        async def get_sentiment(symbol: str) -> dict:
+            ...
+    """
+    def decorator(
+        func: Callable[..., Coroutine[Any, Any, T]]
+    ) -> Callable[..., Coroutine[Any, Any, T]]:
+        @functools.wraps(func)
+        async def wrapper(*args: Any, **kwargs: Any) -> T:
+            cache = get_cache()
+            key = cache._make_key(prefix, *args, *kwargs.values())
+
+            # Check cache first
+            cached_value = cache.get(key)
+            if cached_value is not None:
+                logger.debug(f"Cache hit: {key}")
+                return cached_value
+
+            # Cache miss - await the async function
+            logger.debug(f"Cache miss: {key}")
+            value = await func(*args, **kwargs)
+
+            # Store result in cache
+            if value is not None:
+                cache.set(key, value, ttl)
+
+            return value
         return wrapper
     return decorator

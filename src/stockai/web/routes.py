@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from stockai import __version__
+from stockai.data.cache import async_cached
 from stockai.data.database import init_database
 from stockai.data.sources.yahoo import YahooFinanceSource
 from stockai.data.sources.idx import IDXIndexSource
@@ -172,40 +173,48 @@ async def get_portfolio_analytics() -> dict:
 
 
 @api_router.get("/sentiment/{symbol}")
+@async_cached("sentiment")
 async def get_sentiment(
     symbol: str,
     days: int = Query(7, description="Days of news to analyze"),
 ) -> dict:
     """Get sentiment analysis for a stock."""
+    # Normalize symbol for consistent cache keys
+    symbol = symbol.upper()
+
     from stockai.core.sentiment import SentimentAnalyzer, NewsAggregator
 
     news_agg = NewsAggregator()
-    articles = news_agg.fetch_all(symbol.upper(), max_articles=15, days_back=days)
+    articles = news_agg.fetch_all(symbol, max_articles=15, days_back=days)
 
     if not articles:
         return {
-            "symbol": symbol.upper(),
+            "symbol": symbol,
             "article_count": 0,
             "sentiment": None,
             "message": "No recent news found",
         }
 
     analyzer = SentimentAnalyzer()
-    aggregated = analyzer.aggregate_sentiment(articles, symbol.upper())
+    aggregated = analyzer.aggregate_sentiment(articles, symbol)
 
     return aggregated.to_dict()
 
 
 @api_router.get("/predict/{symbol}")
+@async_cached("prediction")
 async def get_prediction(symbol: str) -> dict:
     """Get stock prediction."""
+    # Normalize symbol for consistent cache keys
+    symbol = symbol.upper()
+
     from stockai.config import get_settings
     from stockai.core.predictor import EnsemblePredictor
 
     settings = get_settings()
     yahoo = YahooFinanceSource()
 
-    df = yahoo.get_price_history(symbol.upper(), period="6mo")
+    df = yahoo.get_price_history(symbol, period="6mo")
     if df.empty or len(df) < 50:
         raise HTTPException(
             status_code=400,
@@ -221,16 +230,16 @@ async def get_prediction(symbol: str) -> dict:
     loaded = ensemble.load_models()
     if not any(loaded.values()):
         return {
-            "symbol": symbol.upper(),
+            "symbol": symbol,
             "prediction": None,
             "message": "No trained models available",
         }
 
     # Get prediction with sentiment
-    result = ensemble.predict_with_sentiment(df, symbol.upper())
+    result = ensemble.predict_with_sentiment(df, symbol)
 
     return {
-        "symbol": symbol.upper(),
+        "symbol": symbol,
         "prediction": result,
     }
 

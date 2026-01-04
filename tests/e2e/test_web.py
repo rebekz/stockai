@@ -527,3 +527,338 @@ class TestWebIntegration:
         # Navigate to sentiment
         sentiment = client.get("/sentiment")
         assert sentiment.status_code == 200
+
+
+# ============ Cached Endpoint Tests ============
+
+
+class TestCachedEndpoints:
+    """Tests for cached API endpoints - sentiment and prediction.
+
+    These tests verify that the sentiment and prediction endpoints work correctly
+    with caching. The async_cached decorator behavior is tested in unit tests
+    (tests/unit/test_cache.py). These integration tests focus on:
+    1. Endpoint returns correct data
+    2. Multiple requests work correctly
+    3. Different parameters produce different results
+    4. Case normalization works (symbol case insensitivity)
+    """
+
+    def test_sentiment_endpoint_returns_correct_data(self, client):
+        """Test that sentiment endpoint returns correctly structured data."""
+        with patch("stockai.core.sentiment.NewsAggregator") as mock_news_cls, \
+             patch("stockai.core.sentiment.SentimentAnalyzer") as mock_analyzer_cls:
+
+            mock_news = MagicMock()
+            mock_news.fetch_all.return_value = [
+                {"title": "Test News", "source": "Test", "content": "Test content"}
+            ]
+            mock_news_cls.return_value = mock_news
+
+            mock_result = MagicMock()
+            mock_result.to_dict.return_value = {
+                "symbol": "BBCA",
+                "article_count": 1,
+                "avg_sentiment_score": 0.65,
+                "dominant_label": "bullish",
+                "confidence": 0.8,
+                "signal_strength": "strong",
+            }
+            mock_analyzer = MagicMock()
+            mock_analyzer.aggregate_sentiment.return_value = mock_result
+            mock_analyzer_cls.return_value = mock_analyzer
+
+            response = client.get("/api/sentiment/BBCA")
+            assert response.status_code == 200
+
+            data = response.json()
+            assert data["symbol"] == "BBCA"
+            assert data["article_count"] == 1
+            assert "avg_sentiment_score" in data
+            assert "dominant_label" in data
+
+    def test_sentiment_endpoint_handles_repeated_requests(self, client):
+        """Test that sentiment endpoint handles repeated requests."""
+        with patch("stockai.core.sentiment.NewsAggregator") as mock_news_cls, \
+             patch("stockai.core.sentiment.SentimentAnalyzer") as mock_analyzer_cls:
+
+            mock_news = MagicMock()
+            mock_news.fetch_all.return_value = [
+                {"title": "Test News", "source": "Test", "content": "Test content"}
+            ]
+            mock_news_cls.return_value = mock_news
+
+            mock_result = MagicMock()
+            mock_result.to_dict.return_value = {
+                "symbol": "BBCA",
+                "article_count": 1,
+                "avg_sentiment_score": 0.65,
+            }
+            mock_analyzer = MagicMock()
+            mock_analyzer.aggregate_sentiment.return_value = mock_result
+            mock_analyzer_cls.return_value = mock_analyzer
+
+            # First request
+            response1 = client.get("/api/sentiment/BBCA")
+            assert response1.status_code == 200
+
+            # Second request
+            response2 = client.get("/api/sentiment/BBCA")
+            assert response2.status_code == 200
+
+            # Results should be identical
+            assert response1.json() == response2.json()
+
+    def test_sentiment_different_symbols_return_different_data(self, client):
+        """Test that different symbols return different sentiment data."""
+        with patch("stockai.core.sentiment.NewsAggregator") as mock_news_cls, \
+             patch("stockai.core.sentiment.SentimentAnalyzer") as mock_analyzer_cls:
+
+            mock_news = MagicMock()
+            mock_news.fetch_all.return_value = [
+                {"title": "Test News", "source": "Test", "content": "Test content"}
+            ]
+            mock_news_cls.return_value = mock_news
+
+            def make_sentiment_result(symbol):
+                mock_result = MagicMock()
+                mock_result.to_dict.return_value = {
+                    "symbol": symbol,
+                    "article_count": 1,
+                    "avg_sentiment_score": 0.65,
+                }
+                return mock_result
+
+            mock_analyzer = MagicMock()
+            mock_analyzer.aggregate_sentiment.side_effect = lambda articles, sym: make_sentiment_result(sym)
+            mock_analyzer_cls.return_value = mock_analyzer
+
+            # Request for BBCA
+            response1 = client.get("/api/sentiment/BBCA")
+            assert response1.status_code == 200
+            assert response1.json()["symbol"] == "BBCA"
+
+            # Request for TLKM
+            response2 = client.get("/api/sentiment/TLKM")
+            assert response2.status_code == 200
+            assert response2.json()["symbol"] == "TLKM"
+
+    def test_sentiment_symbol_case_normalization(self, client):
+        """Test that symbol case is normalized to uppercase."""
+        with patch("stockai.core.sentiment.NewsAggregator") as mock_news_cls, \
+             patch("stockai.core.sentiment.SentimentAnalyzer") as mock_analyzer_cls:
+
+            mock_news = MagicMock()
+            mock_news.fetch_all.return_value = [
+                {"title": "Test News", "source": "Test", "content": "Test content"}
+            ]
+            mock_news_cls.return_value = mock_news
+
+            mock_result = MagicMock()
+            mock_result.to_dict.return_value = {
+                "symbol": "BBCA",
+                "article_count": 1,
+            }
+            mock_analyzer = MagicMock()
+            mock_analyzer.aggregate_sentiment.return_value = mock_result
+            mock_analyzer_cls.return_value = mock_analyzer
+
+            # Request with lowercase
+            response = client.get("/api/sentiment/bbca")
+            assert response.status_code == 200
+            # Symbol should be uppercase in response
+            assert response.json()["symbol"] == "BBCA"
+
+    def test_sentiment_no_news_returns_null_sentiment(self, client):
+        """Test sentiment endpoint handles no news gracefully."""
+        with patch("stockai.core.sentiment.NewsAggregator") as mock_news_cls:
+
+            mock_news = MagicMock()
+            mock_news.fetch_all.return_value = []  # No news articles
+            mock_news_cls.return_value = mock_news
+
+            response = client.get("/api/sentiment/UNKNOWN")
+            assert response.status_code == 200
+
+            data = response.json()
+            assert data["symbol"] == "UNKNOWN"
+            assert data["article_count"] == 0
+            assert data["sentiment"] is None
+            assert "No recent news found" in data["message"]
+
+    def test_prediction_endpoint_returns_correct_data(self, client):
+        """Test that prediction endpoint returns correctly structured data."""
+        import pandas as pd
+        from datetime import datetime, timedelta
+
+        with patch("stockai.web.routes.YahooFinanceSource") as mock_yahoo_cls, \
+             patch("stockai.core.predictor.EnsemblePredictor") as mock_predictor_cls, \
+             patch("stockai.config.get_settings") as mock_settings:
+
+            # Mock settings
+            mock_settings_obj = MagicMock()
+            mock_settings_obj.project_root = MagicMock()
+            mock_settings_obj.project_root.__truediv__ = MagicMock(return_value=MagicMock())
+            mock_settings.return_value = mock_settings_obj
+
+            # Mock Yahoo data
+            dates = [datetime.now() - timedelta(days=i) for i in range(60, 0, -1)]
+            mock_yahoo = MagicMock()
+            mock_yahoo.get_price_history.return_value = pd.DataFrame({
+                "date": dates,
+                "open": [float(9400 + i * 10) for i in range(60)],
+                "high": [float(9500 + i * 10) for i in range(60)],
+                "low": [float(9300 + i * 10) for i in range(60)],
+                "close": [float(9450 + i * 10) for i in range(60)],
+                "volume": [int(10000000 + i * 100000) for i in range(60)],
+            })
+            mock_yahoo_cls.return_value = mock_yahoo
+
+            # Mock predictor
+            mock_predictor = MagicMock()
+            mock_predictor.load_models.return_value = {"xgboost": True, "lstm": False}
+            mock_predictor.predict_with_sentiment.return_value = {
+                "direction": "up",
+                "confidence": 0.72,
+                "confidence_level": "medium",
+            }
+            mock_predictor_cls.return_value = mock_predictor
+
+            response = client.get("/api/predict/BBCA")
+            assert response.status_code == 200
+
+            data = response.json()
+            assert data["symbol"] == "BBCA"
+            assert "prediction" in data
+            assert data["prediction"]["direction"] == "up"
+            assert "confidence" in data["prediction"]
+
+    def test_prediction_endpoint_handles_repeated_requests(self, client):
+        """Test that prediction endpoint handles repeated requests."""
+        import pandas as pd
+        from datetime import datetime, timedelta
+
+        with patch("stockai.web.routes.YahooFinanceSource") as mock_yahoo_cls, \
+             patch("stockai.core.predictor.EnsemblePredictor") as mock_predictor_cls, \
+             patch("stockai.config.get_settings") as mock_settings:
+
+            # Mock settings
+            mock_settings_obj = MagicMock()
+            mock_settings_obj.project_root = MagicMock()
+            mock_settings_obj.project_root.__truediv__ = MagicMock(return_value=MagicMock())
+            mock_settings.return_value = mock_settings_obj
+
+            dates = [datetime.now() - timedelta(days=i) for i in range(60, 0, -1)]
+            mock_yahoo = MagicMock()
+            mock_yahoo.get_price_history.return_value = pd.DataFrame({
+                "date": dates,
+                "close": [float(9450 + i * 10) for i in range(60)],
+                "open": [float(9400 + i * 10) for i in range(60)],
+                "high": [float(9500 + i * 10) for i in range(60)],
+                "low": [float(9300 + i * 10) for i in range(60)],
+                "volume": [int(10000000 + i * 100000) for i in range(60)],
+            })
+            mock_yahoo_cls.return_value = mock_yahoo
+
+            mock_predictor = MagicMock()
+            mock_predictor.load_models.return_value = {"xgboost": True}
+            mock_predictor.predict_with_sentiment.return_value = {
+                "direction": "up",
+                "confidence": 0.72,
+            }
+            mock_predictor_cls.return_value = mock_predictor
+
+            # First request
+            response1 = client.get("/api/predict/BBCA")
+            assert response1.status_code == 200
+
+            # Second request
+            response2 = client.get("/api/predict/BBCA")
+            assert response2.status_code == 200
+
+            # Results should be identical
+            assert response1.json() == response2.json()
+
+    def test_prediction_different_symbols_return_different_data(self, client):
+        """Test that different symbols return different prediction data."""
+        import pandas as pd
+        from datetime import datetime, timedelta
+
+        with patch("stockai.web.routes.YahooFinanceSource") as mock_yahoo_cls, \
+             patch("stockai.core.predictor.EnsemblePredictor") as mock_predictor_cls, \
+             patch("stockai.config.get_settings") as mock_settings:
+
+            mock_settings_obj = MagicMock()
+            mock_settings_obj.project_root = MagicMock()
+            mock_settings_obj.project_root.__truediv__ = MagicMock(return_value=MagicMock())
+            mock_settings.return_value = mock_settings_obj
+
+            dates = [datetime.now() - timedelta(days=i) for i in range(60, 0, -1)]
+            mock_yahoo = MagicMock()
+            mock_yahoo.get_price_history.return_value = pd.DataFrame({
+                "date": dates,
+                "close": [float(9450 + i * 10) for i in range(60)],
+                "open": [float(9400 + i * 10) for i in range(60)],
+                "high": [float(9500 + i * 10) for i in range(60)],
+                "low": [float(9300 + i * 10) for i in range(60)],
+                "volume": [int(10000000 + i * 100000) for i in range(60)],
+            })
+            mock_yahoo_cls.return_value = mock_yahoo
+
+            mock_predictor = MagicMock()
+            mock_predictor.load_models.return_value = {"xgboost": True}
+            mock_predictor.predict_with_sentiment.return_value = {
+                "direction": "up",
+                "confidence": 0.72,
+            }
+            mock_predictor_cls.return_value = mock_predictor
+
+            # Request for BBCA
+            response1 = client.get("/api/predict/BBCA")
+            assert response1.status_code == 200
+            assert response1.json()["symbol"] == "BBCA"
+
+            # Request for TLKM
+            response2 = client.get("/api/predict/TLKM")
+            assert response2.status_code == 200
+            assert response2.json()["symbol"] == "TLKM"
+
+    def test_prediction_symbol_case_normalization(self, client):
+        """Test that symbol case is normalized to uppercase for prediction."""
+        import pandas as pd
+        from datetime import datetime, timedelta
+
+        with patch("stockai.web.routes.YahooFinanceSource") as mock_yahoo_cls, \
+             patch("stockai.core.predictor.EnsemblePredictor") as mock_predictor_cls, \
+             patch("stockai.config.get_settings") as mock_settings:
+
+            mock_settings_obj = MagicMock()
+            mock_settings_obj.project_root = MagicMock()
+            mock_settings_obj.project_root.__truediv__ = MagicMock(return_value=MagicMock())
+            mock_settings.return_value = mock_settings_obj
+
+            dates = [datetime.now() - timedelta(days=i) for i in range(60, 0, -1)]
+            mock_yahoo = MagicMock()
+            mock_yahoo.get_price_history.return_value = pd.DataFrame({
+                "date": dates,
+                "close": [float(9450 + i * 10) for i in range(60)],
+                "open": [float(9400 + i * 10) for i in range(60)],
+                "high": [float(9500 + i * 10) for i in range(60)],
+                "low": [float(9300 + i * 10) for i in range(60)],
+                "volume": [int(10000000 + i * 100000) for i in range(60)],
+            })
+            mock_yahoo_cls.return_value = mock_yahoo
+
+            mock_predictor = MagicMock()
+            mock_predictor.load_models.return_value = {"xgboost": True}
+            mock_predictor.predict_with_sentiment.return_value = {
+                "direction": "up",
+                "confidence": 0.72,
+            }
+            mock_predictor_cls.return_value = mock_predictor
+
+            # Request with lowercase
+            response = client.get("/api/predict/bbca")
+            assert response.status_code == 200
+            # Symbol should be uppercase in response
+            assert response.json()["symbol"] == "BBCA"
