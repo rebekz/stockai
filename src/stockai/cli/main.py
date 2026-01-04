@@ -2138,33 +2138,138 @@ app.add_typer(watchlist_app, name="watchlist")
 
 @watchlist_app.command("list")
 def watchlist_list() -> None:
-    """List all stocks in watchlist."""
-    console.print(
-        Panel(
-            "[yellow]Watchlist - Coming soon![/yellow]\n\n"
-            "Will show:\n"
-            "• Watched stocks with current prices\n"
-            "• Daily change %\n"
-            "• Alert conditions",
-            title="👀 Watchlist",
+    """List all stocks in watchlist.
+
+    Examples:
+        stock watchlist list
+    """
+    from stockai.web.services.watchlist import get_watchlist_items
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    try:
+        items = get_watchlist_items()
+    except Exception as e:
+        console.print(f"[red]Error loading watchlist:[/red] {e}")
+        raise typer.Exit(1)
+
+    if not items:
+        console.print(
+            Panel(
+                "[yellow]Your watchlist is empty.[/yellow]\n\n"
+                "Add stocks with:\n"
+                "  [cyan]stock watchlist add BBCA[/cyan]",
+                title="👀 Watchlist",
+            )
         )
-    )
+        return
+
+    table = Table(title="👀 Watchlist", show_header=True)
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Symbol", style="cyan bold")
+    table.add_column("Price", justify="right")
+    table.add_column("Change", justify="right")
+    table.add_column("Alert ↑", justify="right", style="green")
+    table.add_column("Alert ↓", justify="right", style="red")
+    table.add_column("Notes", style="dim")
+
+    yahoo = YahooFinanceSource()
+    symbols = [item.stock.symbol for item in items if item.stock]
+
+    # Fetch current prices
+    prices = {}
+    for symbol in symbols:
+        try:
+            quote = yahoo.get_quote(symbol)
+            if quote:
+                prices[symbol] = quote
+        except Exception:
+            pass
+
+    for i, item in enumerate(items, 1):
+        symbol = item.stock.symbol if item.stock else "N/A"
+        quote = prices.get(symbol, {})
+
+        price_str = f"Rp {quote.get('price', 0):,.0f}" if quote.get('price') else "-"
+        change = quote.get('change_percent', 0)
+        change_str = f"[{'green' if change >= 0 else 'red'}]{change:+.2f}%[/]" if change else "-"
+
+        alert_above = f"Rp {item.alert_price_above:,.0f}" if item.alert_price_above else "-"
+        alert_below = f"Rp {item.alert_price_below:,.0f}" if item.alert_price_below else "-"
+        notes = (item.notes[:20] + "...") if item.notes and len(item.notes) > 20 else (item.notes or "-")
+
+        table.add_row(str(i), symbol, price_str, change_str, alert_above, alert_below, notes)
+
+    console.print(table)
+    console.print(f"\n[dim]Total: {len(items)} stocks in watchlist[/dim]")
 
 
 @watchlist_app.command("add")
 def watchlist_add(
     symbol: str = typer.Argument(..., help="Stock symbol to watch"),
+    alert_above: Optional[float] = typer.Option(None, "--alert-above", "-a", help="Alert when price goes above this value"),
+    alert_below: Optional[float] = typer.Option(None, "--alert-below", "-b", help="Alert when price goes below this value"),
+    notes: Optional[str] = typer.Option(None, "--notes", "-n", help="Notes for this watchlist item"),
 ) -> None:
-    """Add a stock to watchlist."""
-    console.print(f"[green]Adding {symbol.upper()} to watchlist[/green] - Coming soon!")
+    """Add a stock to watchlist.
+
+    Examples:
+        stock watchlist add BBCA
+        stock watchlist add TLKM --alert-above 4000 --alert-below 3500
+        stock watchlist add BBRI --notes "Wait for dip"
+    """
+    from stockai.web.services.watchlist import (
+        add_to_watchlist,
+        WatchlistItemExistsError,
+    )
+
+    symbol = symbol.upper()
+
+    try:
+        item = add_to_watchlist(
+            symbol=symbol,
+            alert_price_above=alert_above,
+            alert_price_below=alert_below,
+            notes=notes,
+        )
+        console.print(f"[green]✓ Added {symbol} to watchlist[/green]")
+
+        if alert_above or alert_below:
+            if alert_above:
+                console.print(f"  Alert above: Rp {alert_above:,.0f}")
+            if alert_below:
+                console.print(f"  Alert below: Rp {alert_below:,.0f}")
+
+    except WatchlistItemExistsError:
+        console.print(f"[yellow]{symbol} is already in your watchlist[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Error adding {symbol}:[/red] {e}")
+        raise typer.Exit(1)
 
 
 @watchlist_app.command("remove")
 def watchlist_remove(
     symbol: str = typer.Argument(..., help="Stock symbol to remove"),
 ) -> None:
-    """Remove a stock from watchlist."""
-    console.print(f"[yellow]Removing {symbol.upper()} from watchlist - Coming soon![/yellow]")
+    """Remove a stock from watchlist.
+
+    Examples:
+        stock watchlist remove BBCA
+    """
+    from stockai.web.services.watchlist import (
+        remove_from_watchlist_by_symbol,
+        WatchlistItemNotFoundError,
+    )
+
+    symbol = symbol.upper()
+
+    try:
+        remove_from_watchlist_by_symbol(symbol)
+        console.print(f"[green]✓ Removed {symbol} from watchlist[/green]")
+    except WatchlistItemNotFoundError:
+        console.print(f"[yellow]{symbol} is not in your watchlist[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Error removing {symbol}:[/red] {e}")
+        raise typer.Exit(1)
 
 
 @app.command()
