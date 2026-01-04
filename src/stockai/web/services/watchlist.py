@@ -55,6 +55,9 @@ def get_watchlist_items() -> list[WatchlistItem]:
         )
         # Detach from session while keeping loaded relationships
         for item in items:
+            # Must expunge both item and its stock to fully detach
+            if item.stock:
+                session.expunge(item.stock)
             session.expunge(item)
         return items
 
@@ -76,6 +79,9 @@ def get_watchlist_item_by_id(item_id: int) -> Optional[WatchlistItem]:
             .first()
         )
         if item:
+            # Must expunge both item and its stock to fully detach
+            if item.stock:
+                session.expunge(item.stock)
             session.expunge(item)
         return item
 
@@ -97,6 +103,9 @@ def get_watchlist_item_by_stock_id(stock_id: int) -> Optional[WatchlistItem]:
             .first()
         )
         if item:
+            # Must expunge both item and its stock to fully detach
+            if item.stock:
+                session.expunge(item.stock)
             session.expunge(item)
         return item
 
@@ -120,6 +129,9 @@ def get_watchlist_item_by_symbol(symbol: str) -> Optional[WatchlistItem]:
             .first()
         )
         if item:
+            # Must expunge both item and its stock to fully detach
+            if item.stock:
+                session.expunge(item.stock)
             session.expunge(item)
         return item
 
@@ -238,8 +250,9 @@ def add_to_watchlist(
 
         # Reload with stock relationship
         session.refresh(item)
-        # Eagerly load stock
-        _ = item.stock
+        # Eagerly load stock and expunge both
+        if item.stock:
+            session.expunge(item.stock)
         session.expunge(item)
         return item
 
@@ -302,8 +315,9 @@ def update_watchlist_item(
 
         session.flush()
         session.refresh(item)
-        # Eagerly load stock
-        _ = item.stock
+        # Eagerly load stock and expunge both
+        if item.stock:
+            session.expunge(item.stock)
         session.expunge(item)
         return item
 
@@ -332,7 +346,9 @@ def remove_from_watchlist(item_id: int) -> WatchlistItem:
             raise WatchlistItemNotFoundError(item_id)
 
         # Make a copy of the data before deletion
-        # We need to expunge first to detach, then delete the original
+        # We need to expunge both item and stock first to detach, then delete the original
+        if item.stock:
+            session.expunge(item.stock)
         session.expunge(item)
 
         # Re-fetch and delete
@@ -373,6 +389,9 @@ def remove_from_watchlist_by_symbol(symbol: str) -> WatchlistItem:
             raise WatchlistItemNotFoundError(symbol, by_field="symbol")
 
         # Make a copy of the data before deletion
+        # We need to expunge both item and stock to fully detach
+        if item.stock:
+            session.expunge(item.stock)
         session.expunge(item)
 
         # Re-fetch and delete
