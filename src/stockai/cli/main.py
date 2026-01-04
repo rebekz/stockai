@@ -584,6 +584,97 @@ def _display_prediction_result(
 
 
 @app.command()
+def volume(
+    symbol: str = typer.Argument(..., help="Stock symbol to analyze"),
+    period: str = typer.Option("3mo", "--period", "-p", help="Data period (1mo, 3mo, 6mo, 1y)"),
+) -> None:
+    """Analyze volume patterns and generate trading signals.
+
+    Uses volume spikes, money flow, accumulation/distribution, and
+    OBV trends to identify buy/sell signals.
+
+    Examples:
+        stock volume BBCA
+        stock volume TLKM --period 6mo
+    """
+    from stockai.tools.stock_tools import get_volume_signals, get_volume_analysis
+
+    symbol = symbol.upper()
+    console.print(f"\n[bold]📊 Volume Analysis: {symbol}[/bold]\n")
+
+    with console.status("[bold cyan]Analyzing volume patterns..."):
+        # Get volume signals
+        signals = get_volume_signals(symbol, period=period)
+
+        if "error" in signals:
+            console.print(f"[red]Error:[/red] {signals['error']}")
+            raise typer.Exit(1)
+
+        # Get detailed volume analysis
+        analysis = get_volume_analysis(symbol, period=period)
+
+    # Display overall signal
+    overall = signals.get("overall_signal", {})
+    direction = overall.get("direction", "neutral")
+    confidence = overall.get("confidence", 0)
+
+    dir_color = {"buy": "green", "sell": "red", "neutral": "yellow"}.get(direction, "white")
+    dir_emoji = {"buy": "🟢", "sell": "🔴", "neutral": "🟡"}.get(direction, "⚪")
+
+    # Signal summary panel
+    lines = [
+        f"{dir_emoji} [bold {dir_color}]{direction.upper()}[/bold {dir_color}] Signal",
+        f"Confidence: [bold]{confidence:.0%}[/bold]",
+        "",
+        f"[dim]{overall.get('description', '')}[/dim]",
+    ]
+
+    console.print(Panel("\n".join(lines), title="Volume Signal", border_style=dir_color))
+
+    # Volume metrics table
+    table = Table(title="📈 Volume Metrics", show_header=True)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", justify="right")
+    table.add_column("Interpretation", style="dim")
+
+    current_price = signals.get("current_price", 0)
+    current_volume = signals.get("current_volume", 0)
+    volume_ratio = signals.get("volume_ratio_20d", 1.0)
+
+    table.add_row("Current Price", f"Rp {current_price:,.0f}", "")
+    table.add_row("Current Volume", f"{current_volume:,.0f}", "")
+
+    vol_interp = "High" if volume_ratio > 1.5 else ("Low" if volume_ratio < 0.7 else "Normal")
+    table.add_row("Volume Ratio (20d)", f"{volume_ratio:.2f}x", vol_interp)
+
+    if "error" not in analysis:
+        vwap = analysis.get("vwap", 0)
+        mfi = analysis.get("money_flow_index", 0)
+        obv_trend = analysis.get("obv_trend", "neutral")
+
+        table.add_row("VWAP", f"Rp {vwap:,.0f}", "Above = bullish" if current_price > vwap else "Below = bearish")
+        mfi_interp = "Overbought" if mfi > 80 else ("Oversold" if mfi < 20 else "Neutral")
+        table.add_row("Money Flow Index", f"{mfi:.1f}", mfi_interp)
+        table.add_row("OBV Trend", obv_trend.capitalize(), "")
+
+    console.print(table)
+
+    # Individual signals
+    individual = signals.get("individual_signals", [])
+    if individual:
+        console.print("\n[bold]Detected Signals:[/bold]")
+        for sig in individual:
+            sig_dir = sig.get("direction", "neutral")
+            sig_emoji = {"bullish": "🟢", "bearish": "🔴", "neutral": "🟡"}.get(sig_dir, "⚪")
+            sig_conf = sig.get("confidence", 0)
+            console.print(f"  {sig_emoji} {sig.get('type', '')}: {sig.get('description', '')} ({sig_conf:.0%})")
+
+    # Signal summary
+    summary = signals.get("signal_summary", {})
+    console.print(f"\n[dim]Bullish: {summary.get('bullish', 0)} | Bearish: {summary.get('bearish', 0)} | Neutral: {summary.get('neutral', 0)}[/dim]")
+
+
+@app.command()
 def suggest(
     index: str = typer.Option("IDX30", "--index", "-i", help="Index to scan (IDX30, LQ45)"),
     min_score: float = typer.Option(0.6, "--min-score", "-m", help="Minimum signal score (0-1)"),
