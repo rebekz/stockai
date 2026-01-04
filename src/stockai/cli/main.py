@@ -13,6 +13,7 @@ from rich.table import Table
 
 from stockai import __version__
 from stockai.config import get_settings
+from stockai.core.predictor import EnsemblePredictor
 from stockai.data.database import init_database, get_db
 from stockai.data.sources.yahoo import YahooFinanceSource
 from stockai.data.sources.idx import IDXIndexSource, get_idx30, get_lq45
@@ -446,8 +447,6 @@ def predict(
             progress.update(task, description="Loading prediction models...")
 
             # Load ensemble predictor
-            from stockai.core.predictor import EnsemblePredictor
-
             model_dir = settings.project_root / "data" / "models"
             xgb_path = model_dir / "xgboost_v1.json"
             lstm_path = model_dir / "lstm_v1.pt"
@@ -1101,8 +1100,6 @@ def train(
 
             # Initialize and train ensemble
             progress.update(task, description="Loading predictor...", completed=0, total=None)
-
-            from stockai.core.predictor import EnsemblePredictor
 
             ensemble = EnsemblePredictor(
                 xgboost_path=xgb_path,

@@ -13,8 +13,8 @@ import numpy as np
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
-from stockai.data.database import init_database, get_db
-from stockai.data.models import Stock, Prediction
+from stockai.data.database import init_database, session_scope
+from stockai.data.models import Stock, Prediction, StockPrice, PortfolioItem, PortfolioTransaction, WatchlistItem
 from stockai.core.predictor.accuracy import (
     PredictionAccuracyTracker,
     NEUTRAL_THRESHOLD_PERCENT,
@@ -80,7 +80,11 @@ class TestPredictionAccuracyTracker:
         init_database()
         self.tracker = PredictionAccuracyTracker()
         # Clear any existing predictions
-        with get_db() as session:
+        with session_scope() as session:
+            session.query(WatchlistItem).delete()
+            session.query(PortfolioTransaction).delete()
+            session.query(PortfolioItem).delete()
+            session.query(StockPrice).delete()
             session.query(Prediction).delete()
             session.query(Stock).delete()
             session.commit()
@@ -139,7 +143,7 @@ class TestPredictionAccuracyTracker:
 
     def test_get_pending_predictions_with_data(self):
         """Test getting pending predictions with past target dates."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             # Create prediction with past target date and is_correct=None
             self._create_test_prediction(
@@ -156,7 +160,7 @@ class TestPredictionAccuracyTracker:
 
     def test_get_pending_predictions_excludes_evaluated(self):
         """Test that already evaluated predictions are excluded."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             # Create evaluated prediction (is_correct is set)
             self._create_test_prediction(
@@ -171,7 +175,7 @@ class TestPredictionAccuracyTracker:
 
     def test_get_pending_predictions_excludes_future(self):
         """Test that future predictions are excluded."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             # Create prediction with future target date
             self._create_test_prediction(
@@ -335,7 +339,7 @@ class TestPredictionAccuracyTracker:
         mock_yahoo.get_price_history.return_value = mock_df
 
         # Create pending prediction
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             self._create_test_prediction(
                 session,
@@ -356,7 +360,7 @@ class TestPredictionAccuracyTracker:
         assert result["skipped_count"] == 0
 
         # Verify prediction was updated
-        with get_db() as session:
+        with session_scope() as session:
             pred = session.query(Prediction).first()
             assert pred.is_correct is True
             assert pred.actual_direction == "UP"
@@ -377,7 +381,7 @@ class TestPredictionAccuracyTracker:
         mock_yahoo.get_price_history.return_value = mock_df
 
         # Create pending prediction for UP
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             self._create_test_prediction(
                 session,
@@ -394,7 +398,7 @@ class TestPredictionAccuracyTracker:
         tracker.update_past_predictions()
 
         # Verify prediction was marked incorrect
-        with get_db() as session:
+        with session_scope() as session:
             pred = session.query(Prediction).first()
             assert pred.is_correct is False
             assert pred.actual_direction == "DOWN"
@@ -409,7 +413,11 @@ class TestGetAccuracyMetrics:
         """Setup test database."""
         init_database()
         self.tracker = PredictionAccuracyTracker()
-        with get_db() as session:
+        with session_scope() as session:
+            session.query(WatchlistItem).delete()
+            session.query(PortfolioTransaction).delete()
+            session.query(PortfolioItem).delete()
+            session.query(StockPrice).delete()
             session.query(Prediction).delete()
             session.query(Stock).delete()
             session.commit()
@@ -450,7 +458,7 @@ class TestGetAccuracyMetrics:
 
     def test_get_accuracy_metrics_all_correct(self):
         """Test accuracy metrics when all predictions are correct."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             for _ in range(5):
                 self._create_evaluated_prediction(session, stock, "UP", True)
@@ -463,7 +471,7 @@ class TestGetAccuracyMetrics:
 
     def test_get_accuracy_metrics_all_wrong(self):
         """Test accuracy metrics when all predictions are wrong."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             for _ in range(5):
                 self._create_evaluated_prediction(session, stock, "UP", False)
@@ -476,7 +484,7 @@ class TestGetAccuracyMetrics:
 
     def test_get_accuracy_metrics_mixed(self):
         """Test accuracy metrics with mixed correct/incorrect."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             # 3 correct, 2 wrong = 60% accuracy
             for _ in range(3):
@@ -492,7 +500,7 @@ class TestGetAccuracyMetrics:
 
     def test_get_accuracy_metrics_by_direction(self):
         """Test accuracy breakdown by direction."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             # 2 correct UP, 1 wrong UP
             for _ in range(2):
@@ -516,7 +524,7 @@ class TestGetAccuracyMetrics:
 
     def test_get_accuracy_metrics_by_confidence(self):
         """Test accuracy breakdown by confidence level."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             # HIGH confidence (>= 0.7)
             pred = Prediction(
@@ -582,7 +590,11 @@ class TestGetStockAccuracy:
         """Setup test database."""
         init_database()
         self.tracker = PredictionAccuracyTracker()
-        with get_db() as session:
+        with session_scope() as session:
+            session.query(WatchlistItem).delete()
+            session.query(PortfolioTransaction).delete()
+            session.query(PortfolioItem).delete()
+            session.query(StockPrice).delete()
             session.query(Prediction).delete()
             session.query(Stock).delete()
             session.commit()
@@ -605,7 +617,7 @@ class TestGetStockAccuracy:
 
     def test_get_stock_accuracy_no_predictions(self):
         """Test accuracy for stock with no predictions."""
-        with get_db() as session:
+        with session_scope() as session:
             self._create_test_stock(session, "BBCA")
 
         result = self.tracker.get_stock_accuracy("BBCA")
@@ -616,7 +628,7 @@ class TestGetStockAccuracy:
 
     def test_get_stock_accuracy_with_data(self):
         """Test accuracy for stock with predictions."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
 
             # Create 3 correct, 1 wrong = 75% accuracy
@@ -655,7 +667,7 @@ class TestGetStockAccuracy:
 
     def test_get_stock_accuracy_includes_recent_predictions(self):
         """Test that recent predictions are included."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
 
             pred = Prediction(
@@ -680,7 +692,7 @@ class TestGetStockAccuracy:
 
     def test_get_stock_accuracy_includes_trend(self):
         """Test that accuracy trend is included."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
 
             # Create predictions for different months
@@ -712,7 +724,11 @@ class TestGetAccuracyByModel:
         """Setup test database."""
         init_database()
         self.tracker = PredictionAccuracyTracker()
-        with get_db() as session:
+        with session_scope() as session:
+            session.query(WatchlistItem).delete()
+            session.query(PortfolioTransaction).delete()
+            session.query(PortfolioItem).delete()
+            session.query(StockPrice).delete()
             session.query(Prediction).delete()
             session.query(Stock).delete()
             session.commit()
@@ -735,7 +751,7 @@ class TestGetAccuracyByModel:
 
     def test_get_accuracy_by_model_with_data(self):
         """Test model accuracy analysis with predictions."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
 
             # Create predictions with varying model probabilities
@@ -766,7 +782,7 @@ class TestGetAccuracyByModel:
 
     def test_get_accuracy_by_model_correlation_summary(self):
         """Test that correlation summary is calculated."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
 
             # Create predictions where high xgboost = correct
@@ -806,7 +822,7 @@ class TestPredictionAccuracyTrackerEdgeCases:
 
     def test_tracker_with_injected_session(self):
         """Test tracker with injected session."""
-        with get_db() as session:
+        with session_scope() as session:
             tracker = PredictionAccuracyTracker(session=session)
             assert tracker._session is session
             assert tracker._use_context_manager is False
@@ -850,7 +866,11 @@ class TestPredictionAccuracyAPI:
         app = create_app()
         self.client = TestClient(app)
         # Clear existing data
-        with get_db() as session:
+        with session_scope() as session:
+            session.query(WatchlistItem).delete()
+            session.query(PortfolioTransaction).delete()
+            session.query(PortfolioItem).delete()
+            session.query(StockPrice).delete()
             session.query(Prediction).delete()
             session.query(Stock).delete()
             session.commit()
@@ -925,7 +945,7 @@ class TestGetPredictionAccuracyEndpoint(TestPredictionAccuracyAPI):
 
     def test_get_accuracy_with_predictions(self):
         """Should return accuracy metrics when predictions exist."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             # 3 correct, 2 wrong = 60% accuracy
             for _ in range(3):
@@ -943,7 +963,7 @@ class TestGetPredictionAccuracyEndpoint(TestPredictionAccuracyAPI):
 
     def test_get_accuracy_includes_direction_breakdown(self):
         """Should include accuracy breakdown by direction."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             self._create_evaluated_prediction(session, stock, direction="UP", is_correct=True)
             self._create_evaluated_prediction(session, stock, direction="DOWN", is_correct=False)
@@ -957,7 +977,7 @@ class TestGetPredictionAccuracyEndpoint(TestPredictionAccuracyAPI):
 
     def test_get_accuracy_includes_confidence_breakdown(self):
         """Should include accuracy breakdown by confidence level."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             # HIGH confidence
             self._create_evaluated_prediction(session, stock, confidence=0.8, is_correct=True)
@@ -990,7 +1010,7 @@ class TestGetStockAccuracyEndpoint(TestPredictionAccuracyAPI):
 
     def test_get_stock_accuracy_no_predictions(self):
         """Should return 404 for stock with no predictions."""
-        with get_db() as session:
+        with session_scope() as session:
             self._create_test_stock(session, "BBCA")
 
         response = self.client.get("/api/predictions/accuracy/BBCA")
@@ -998,7 +1018,7 @@ class TestGetStockAccuracyEndpoint(TestPredictionAccuracyAPI):
 
     def test_get_stock_accuracy_with_data(self):
         """Should return accuracy metrics for stock with predictions."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             # 3 correct, 1 wrong = 75% accuracy
             for _ in range(3):
@@ -1016,7 +1036,7 @@ class TestGetStockAccuracyEndpoint(TestPredictionAccuracyAPI):
 
     def test_get_stock_accuracy_case_insensitive(self):
         """Should handle lowercase symbol."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             self._create_evaluated_prediction(session, stock, is_correct=True)
 
@@ -1028,7 +1048,7 @@ class TestGetStockAccuracyEndpoint(TestPredictionAccuracyAPI):
 
     def test_get_stock_accuracy_includes_recent_predictions(self):
         """Should include recent predictions in response."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             self._create_evaluated_prediction(session, stock, direction="UP", is_correct=True)
 
@@ -1042,7 +1062,7 @@ class TestGetStockAccuracyEndpoint(TestPredictionAccuracyAPI):
 
     def test_get_stock_accuracy_includes_trend(self):
         """Should include accuracy trend in response."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             # Create predictions for different months
             for month in [1, 2, 3]:
@@ -1067,7 +1087,7 @@ class TestGetStockAccuracyEndpoint(TestPredictionAccuracyAPI):
 
     def test_get_stock_accuracy_includes_breakdown(self):
         """Should include breakdowns by direction and confidence."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             self._create_evaluated_prediction(session, stock, direction="UP", is_correct=True)
             self._create_evaluated_prediction(session, stock, direction="DOWN", is_correct=False)
@@ -1111,7 +1131,7 @@ class TestBackfillPredictionAccuracyEndpoint(TestPredictionAccuracyAPI):
         mock_yahoo.get_price_history.return_value = mock_df
 
         # Create pending prediction
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             pred = Prediction(
                 stock_id=stock.id,
@@ -1149,7 +1169,7 @@ class TestBackfillPredictionAccuracyEndpoint(TestPredictionAccuracyAPI):
         mock_yahoo.get_price_history.return_value = None
 
         # Create pending prediction
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             self._create_pending_prediction(session, stock)
 
@@ -1173,7 +1193,7 @@ class TestBackfillPredictionAccuracyEndpoint(TestPredictionAccuracyAPI):
         mock_yahoo.get_price_history.return_value = mock_df
 
         # Create multiple pending predictions
-        with get_db() as session:
+        with session_scope() as session:
             stock1 = self._create_test_stock(session, "BBCA")
             stock2 = self._create_test_stock(session, "BBRI")
 
@@ -1208,7 +1228,7 @@ class TestPredictionAccuracyAPIEdgeCases(TestPredictionAccuracyAPI):
 
     def test_accuracy_with_all_correct_predictions(self):
         """Should handle 100% accuracy."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             for _ in range(5):
                 self._create_evaluated_prediction(session, stock, is_correct=True)
@@ -1220,7 +1240,7 @@ class TestPredictionAccuracyAPIEdgeCases(TestPredictionAccuracyAPI):
 
     def test_accuracy_with_all_wrong_predictions(self):
         """Should handle 0% accuracy."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             for _ in range(5):
                 self._create_evaluated_prediction(session, stock, is_correct=False)
@@ -1232,7 +1252,7 @@ class TestPredictionAccuracyAPIEdgeCases(TestPredictionAccuracyAPI):
 
     def test_stock_accuracy_symbol_with_suffix(self):
         """Should handle symbol with market suffix (e.g., BBCA.JK)."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA.JK")
             self._create_evaluated_prediction(session, stock, is_correct=True)
 
@@ -1244,7 +1264,7 @@ class TestPredictionAccuracyAPIEdgeCases(TestPredictionAccuracyAPI):
 
     def test_backfill_idempotent(self):
         """Backfill should be idempotent - already evaluated predictions not re-processed."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             # Create already evaluated prediction
             self._create_evaluated_prediction(session, stock, is_correct=True)
@@ -1277,7 +1297,11 @@ class TestPredictionsCLI:
     def setup(self):
         """Setup test database."""
         init_database()
-        with get_db() as session:
+        with session_scope() as session:
+            session.query(WatchlistItem).delete()
+            session.query(PortfolioTransaction).delete()
+            session.query(PortfolioItem).delete()
+            session.query(StockPrice).delete()
             session.query(Prediction).delete()
             session.query(Stock).delete()
             session.commit()
@@ -1344,11 +1368,11 @@ class TestPredictionsAccuracyCommand(TestPredictionsCLI):
         """Test accuracy command with empty database."""
         result = runner.invoke(app, ["predictions", "accuracy"])
         assert result.exit_code == 0
-        assert "No predictions" in result.stdout or "0" in result.stdout
+        assert "No evaluated predictions found" in result.stdout or "No predictions" in result.stdout or "0" in result.stdout
 
     def test_accuracy_command_with_predictions(self):
         """Test accuracy command with predictions in database."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             # Create 3 correct, 2 wrong predictions
             for _ in range(3):
@@ -1363,7 +1387,7 @@ class TestPredictionsAccuracyCommand(TestPredictionsCLI):
 
     def test_accuracy_command_shows_direction_breakdown(self):
         """Test that accuracy command shows direction breakdown."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             self._create_evaluated_prediction(session, stock, direction="UP", is_correct=True)
             self._create_evaluated_prediction(session, stock, direction="DOWN", is_correct=False)
@@ -1375,7 +1399,7 @@ class TestPredictionsAccuracyCommand(TestPredictionsCLI):
 
     def test_accuracy_command_shows_confidence_breakdown(self):
         """Test that accuracy command shows confidence level breakdown."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             self._create_evaluated_prediction(session, stock, confidence=0.8, is_correct=True)
             self._create_evaluated_prediction(session, stock, confidence=0.5, is_correct=False)
@@ -1398,7 +1422,7 @@ class TestPredictionsAccuracySymbolOption(TestPredictionsCLI):
 
     def test_accuracy_symbol_option_no_predictions(self):
         """Test --symbol option for stock with no predictions."""
-        with get_db() as session:
+        with session_scope() as session:
             self._create_test_stock(session, "BBCA")
 
         result = runner.invoke(app, ["predictions", "accuracy", "--symbol", "BBCA"])
@@ -1407,7 +1431,7 @@ class TestPredictionsAccuracySymbolOption(TestPredictionsCLI):
 
     def test_accuracy_symbol_option_with_predictions(self):
         """Test --symbol option for stock with predictions."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             for _ in range(3):
                 self._create_evaluated_prediction(session, stock, is_correct=True)
@@ -1421,7 +1445,7 @@ class TestPredictionsAccuracySymbolOption(TestPredictionsCLI):
 
     def test_accuracy_symbol_option_short_form(self):
         """Test -s short form of --symbol option."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBRI")
             self._create_evaluated_prediction(session, stock, is_correct=True)
 
@@ -1431,7 +1455,7 @@ class TestPredictionsAccuracySymbolOption(TestPredictionsCLI):
 
     def test_accuracy_symbol_option_case_insensitive(self):
         """Test --symbol option is case insensitive."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BMRI")
             self._create_evaluated_prediction(session, stock, is_correct=True)
 
@@ -1441,7 +1465,7 @@ class TestPredictionsAccuracySymbolOption(TestPredictionsCLI):
 
     def test_accuracy_symbol_option_shows_recent_predictions(self):
         """Test that --symbol shows recent predictions."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             self._create_evaluated_prediction(session, stock, direction="UP", is_correct=True)
 
@@ -1456,7 +1480,7 @@ class TestPredictionsAccuracyVerboseOption(TestPredictionsCLI):
 
     def test_accuracy_verbose_option(self):
         """Test --verbose option shows additional details."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             for _ in range(5):
                 self._create_evaluated_prediction(session, stock, is_correct=True)
@@ -1468,7 +1492,7 @@ class TestPredictionsAccuracyVerboseOption(TestPredictionsCLI):
 
     def test_accuracy_verbose_short_form(self):
         """Test -v short form of --verbose option."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             for _ in range(3):
                 self._create_evaluated_prediction(session, stock, is_correct=True)
@@ -1478,7 +1502,7 @@ class TestPredictionsAccuracyVerboseOption(TestPredictionsCLI):
 
     def test_accuracy_verbose_with_symbol(self):
         """Test --verbose and --symbol options together."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             # Create predictions for different months
             for month in range(1, 4):
@@ -1532,7 +1556,7 @@ class TestPredictionsBackfillCommand(TestPredictionsCLI):
         })
         mock_yahoo.get_price_history.return_value = mock_df
 
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             pred = Prediction(
                 stock_id=stock.id,
@@ -1569,7 +1593,7 @@ class TestPredictionsBackfillDryRunOption(TestPredictionsCLI):
 
     def test_backfill_dry_run_with_pending_predictions(self):
         """Test --dry-run option shows what would be updated."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             self._create_pending_prediction(session, stock, direction="UP")
 
@@ -1582,7 +1606,7 @@ class TestPredictionsBackfillDryRunOption(TestPredictionsCLI):
 
     def test_backfill_dry_run_short_form(self):
         """Test -n short form of --dry-run option."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "TLKM")
             self._create_pending_prediction(session, stock)
 
@@ -1592,7 +1616,7 @@ class TestPredictionsBackfillDryRunOption(TestPredictionsCLI):
 
     def test_backfill_dry_run_does_not_modify_database(self):
         """Test that --dry-run does not modify the database."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             pred = self._create_pending_prediction(session, stock)
             pred_id = pred.id
@@ -1602,7 +1626,7 @@ class TestPredictionsBackfillDryRunOption(TestPredictionsCLI):
         assert result.exit_code == 0
 
         # Verify prediction is still pending (not updated)
-        with get_db() as session:
+        with session_scope() as session:
             pred = session.query(Prediction).filter(Prediction.id == pred_id).first()
             assert pred.is_correct is None
             assert pred.actual_direction is None
@@ -1610,7 +1634,7 @@ class TestPredictionsBackfillDryRunOption(TestPredictionsCLI):
 
     def test_backfill_dry_run_shows_pending_count(self):
         """Test that --dry-run shows count of pending predictions."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, "BBCA")
             for _ in range(3):
                 self._create_pending_prediction(session, stock)
@@ -1622,7 +1646,7 @@ class TestPredictionsBackfillDryRunOption(TestPredictionsCLI):
 
     def test_backfill_dry_run_shows_symbol_summary(self):
         """Test that --dry-run shows summary by symbol."""
-        with get_db() as session:
+        with session_scope() as session:
             stock1 = self._create_test_stock(session, "BBCA")
             stock2 = self._create_test_stock(session, "BBRI")
             for _ in range(2):
@@ -1641,7 +1665,7 @@ class TestPredictionsCLIEdgeCases(TestPredictionsCLI):
 
     def test_accuracy_with_100_percent_accuracy(self):
         """Test accuracy command with 100% accuracy."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             for _ in range(5):
                 self._create_evaluated_prediction(session, stock, is_correct=True)
@@ -1652,7 +1676,7 @@ class TestPredictionsCLIEdgeCases(TestPredictionsCLI):
 
     def test_accuracy_with_0_percent_accuracy(self):
         """Test accuracy command with 0% accuracy."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             for _ in range(5):
                 self._create_evaluated_prediction(session, stock, is_correct=False)
@@ -1663,7 +1687,7 @@ class TestPredictionsCLIEdgeCases(TestPredictionsCLI):
 
     def test_accuracy_multiple_stocks(self):
         """Test accuracy command with multiple stocks."""
-        with get_db() as session:
+        with session_scope() as session:
             stock1 = self._create_test_stock(session, "BBCA")
             stock2 = self._create_test_stock(session, "BBRI")
             self._create_evaluated_prediction(session, stock1, is_correct=True)
@@ -1676,7 +1700,7 @@ class TestPredictionsCLIEdgeCases(TestPredictionsCLI):
 
     def test_backfill_already_evaluated_predictions(self):
         """Test backfill skips already evaluated predictions."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session)
             # Create only evaluated predictions (not pending)
             for _ in range(3):
@@ -1707,7 +1731,7 @@ class TestPredictShowAccuracyOption(TestPredictionsCLI):
     def test_predict_show_accuracy_no_data(self):
         """Test --show-accuracy with no accuracy data."""
         # Create a stock but no predictions
-        with get_db() as session:
+        with session_scope() as session:
             self._create_test_stock(session, symbol="TSTX")
 
         # Mocking the prediction to avoid needing actual models
@@ -1742,7 +1766,7 @@ class TestPredictShowAccuracyOption(TestPredictionsCLI):
 
     def test_predict_show_accuracy_with_data(self):
         """Test --show-accuracy with accuracy data available."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, symbol="TSTA")
             # Create some evaluated predictions for this stock
             for i in range(5):
@@ -1781,7 +1805,7 @@ class TestPredictShowAccuracyOption(TestPredictionsCLI):
 
     def test_predict_show_accuracy_warns_on_low_accuracy(self):
         """Test --show-accuracy warns when accuracy is low."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, symbol="TSTL")
             # Create predictions with low accuracy (all wrong)
             for _ in range(10):
@@ -1819,7 +1843,7 @@ class TestPredictShowAccuracyOption(TestPredictionsCLI):
 
     def test_predict_show_accuracy_short_option(self):
         """Test -a short option works for --show-accuracy."""
-        with get_db() as session:
+        with session_scope() as session:
             self._create_test_stock(session, symbol="TSTS")
 
         # Mocking the prediction to avoid needing actual models
@@ -1853,7 +1877,7 @@ class TestPredictShowAccuracyOption(TestPredictionsCLI):
 
     def test_predict_without_show_accuracy_no_accuracy_panel(self):
         """Test predict without --show-accuracy doesn't show accuracy panel."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, symbol="TSTN")
             # Create some predictions
             for _ in range(3):
@@ -1896,7 +1920,7 @@ class TestPredictEndpointWithHistoricalAccuracy(TestPredictionAccuracyAPI):
 
     def test_predict_endpoint_includes_historical_accuracy_field(self):
         """Predict endpoint response should include historical_accuracy field."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, symbol="BBRI")
 
         # Mock the EnsemblePredictor and YahooFinanceSource
@@ -1931,7 +1955,7 @@ class TestPredictEndpointWithHistoricalAccuracy(TestPredictionAccuracyAPI):
 
     def test_predict_endpoint_no_historical_predictions(self):
         """Should return None for historical_accuracy when stock has no predictions."""
-        with get_db() as session:
+        with session_scope() as session:
             self._create_test_stock(session, symbol="NEWX")
 
         # Mock the EnsemblePredictor and YahooFinanceSource
@@ -1967,7 +1991,7 @@ class TestPredictEndpointWithHistoricalAccuracy(TestPredictionAccuracyAPI):
 
     def test_predict_endpoint_with_historical_predictions(self):
         """Should return accuracy metrics when stock has historical predictions."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, symbol="ACCX")
             # 3 correct, 2 wrong = 60% accuracy
             for _ in range(3):
@@ -2010,7 +2034,7 @@ class TestPredictEndpointWithHistoricalAccuracy(TestPredictionAccuracyAPI):
 
     def test_predict_endpoint_historical_accuracy_includes_direction_breakdown(self):
         """Historical accuracy should include direction breakdown."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, symbol="DIRX")
             self._create_evaluated_prediction(session, stock, direction="UP", is_correct=True)
             self._create_evaluated_prediction(session, stock, direction="DOWN", is_correct=False)
@@ -2049,7 +2073,7 @@ class TestPredictEndpointWithHistoricalAccuracy(TestPredictionAccuracyAPI):
 
     def test_predict_endpoint_historical_accuracy_includes_confidence_breakdown(self):
         """Historical accuracy should include confidence breakdown."""
-        with get_db() as session:
+        with session_scope() as session:
             stock = self._create_test_stock(session, symbol="CNFX")
             # HIGH confidence prediction
             self._create_evaluated_prediction(session, stock, confidence=0.8, is_correct=True)
@@ -2090,7 +2114,7 @@ class TestPredictEndpointWithHistoricalAccuracy(TestPredictionAccuracyAPI):
 
     def test_predict_endpoint_no_models_includes_accuracy_field(self):
         """Response should include historical_accuracy field even when no models available."""
-        with get_db() as session:
+        with session_scope() as session:
             self._create_test_stock(session, symbol="NOMX")
 
         # Mock the EnsemblePredictor and YahooFinanceSource

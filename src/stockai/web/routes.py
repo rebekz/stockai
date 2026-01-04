@@ -11,6 +11,8 @@ from fastapi import APIRouter, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from stockai import __version__
+from stockai.config import get_settings
+from stockai.core.predictor import EnsemblePredictor, PredictionAccuracyTracker
 from stockai.data.database import init_database
 from stockai.data.sources.yahoo import YahooFinanceSource
 from stockai.data.sources.idx import IDXIndexSource
@@ -186,9 +188,6 @@ async def get_prediction(symbol: str) -> dict:
     Returns a prediction for the stock along with historical accuracy
     metrics if available.
     """
-    from stockai.config import get_settings
-    from stockai.core.predictor import EnsemblePredictor, PredictionAccuracyTracker
-
     settings = get_settings()
     yahoo = YahooFinanceSource()
 
@@ -347,8 +346,6 @@ async def get_prediction_accuracy() -> dict:
     """
     init_database()
 
-    from stockai.core.predictor import PredictionAccuracyTracker
-
     tracker = PredictionAccuracyTracker()
     metrics = tracker.get_accuracy_metrics()
 
@@ -373,8 +370,6 @@ async def get_stock_accuracy(symbol: str) -> dict:
         HTTPException 404: If the stock is not found or has no predictions
     """
     init_database()
-
-    from stockai.core.predictor import PredictionAccuracyTracker
 
     tracker = PredictionAccuracyTracker()
     metrics = tracker.get_stock_accuracy(symbol.upper())
@@ -405,8 +400,6 @@ async def backfill_prediction_accuracy() -> dict:
         - total_pending: Total number of predictions that needed updating
     """
     init_database()
-
-    from stockai.core.predictor import PredictionAccuracyTracker
 
     tracker = PredictionAccuracyTracker()
     result = tracker.update_past_predictions()
@@ -488,9 +481,6 @@ async def export_stock_report(symbol: str) -> dict:
 
     # Get prediction (if models available)
     try:
-        from stockai.config import get_settings
-        from stockai.core.predictor import EnsemblePredictor
-
         settings = get_settings()
         model_dir = settings.project_root / "data" / "models"
 
