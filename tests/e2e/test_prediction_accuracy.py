@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
 from stockai.data.database import init_database, session_scope
-from stockai.data.models import Stock, Prediction, StockPrice, PortfolioItem, PortfolioTransaction, WatchlistItem
+from stockai.data.models import Stock, Prediction, StockPrice, PortfolioItem, PortfolioTransaction, WatchlistItem, NewsArticle
 from stockai.core.predictor.accuracy import (
     PredictionAccuracyTracker,
     NEUTRAL_THRESHOLD_PERCENT,
@@ -81,6 +81,7 @@ class TestPredictionAccuracyTracker:
         self.tracker = PredictionAccuracyTracker()
         # Clear any existing predictions
         with session_scope() as session:
+            session.query(NewsArticle).delete()
             session.query(WatchlistItem).delete()
             session.query(PortfolioTransaction).delete()
             session.query(PortfolioItem).delete()
@@ -414,6 +415,7 @@ class TestGetAccuracyMetrics:
         init_database()
         self.tracker = PredictionAccuracyTracker()
         with session_scope() as session:
+            session.query(NewsArticle).delete()
             session.query(WatchlistItem).delete()
             session.query(PortfolioTransaction).delete()
             session.query(PortfolioItem).delete()
@@ -591,6 +593,7 @@ class TestGetStockAccuracy:
         init_database()
         self.tracker = PredictionAccuracyTracker()
         with session_scope() as session:
+            session.query(NewsArticle).delete()
             session.query(WatchlistItem).delete()
             session.query(PortfolioTransaction).delete()
             session.query(PortfolioItem).delete()
@@ -725,6 +728,7 @@ class TestGetAccuracyByModel:
         init_database()
         self.tracker = PredictionAccuracyTracker()
         with session_scope() as session:
+            session.query(NewsArticle).delete()
             session.query(WatchlistItem).delete()
             session.query(PortfolioTransaction).delete()
             session.query(PortfolioItem).delete()
@@ -867,6 +871,7 @@ class TestPredictionAccuracyAPI:
         self.client = TestClient(app)
         # Clear existing data
         with session_scope() as session:
+            session.query(NewsArticle).delete()
             session.query(WatchlistItem).delete()
             session.query(PortfolioTransaction).delete()
             session.query(PortfolioItem).delete()
@@ -1298,6 +1303,7 @@ class TestPredictionsCLI:
         """Setup test database."""
         init_database()
         with session_scope() as session:
+            session.query(NewsArticle).delete()
             session.query(WatchlistItem).delete()
             session.query(PortfolioTransaction).delete()
             session.query(PortfolioItem).delete()
