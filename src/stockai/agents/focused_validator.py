@@ -7,6 +7,8 @@ Implements a streamlined validation pipeline with 3 specialized agents:
 
 Each agent receives pre-computed data and returns a simple APPROVE/REJECT decision.
 The pipeline short-circuits on first rejection for efficiency.
+
+Requires the 'ai' optional dependency: pip install stockai[ai]
 """
 
 import asyncio
@@ -14,8 +16,17 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from langchain_core.messages import HumanMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+logger = logging.getLogger(__name__)
+
+# Check for langchain dependencies (optional)
+try:
+    from langchain_core.messages import HumanMessage
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    HAS_LANGCHAIN = True
+except ImportError:
+    HAS_LANGCHAIN = False
+    HumanMessage = Any
+    ChatGoogleGenerativeAI = Any
 
 from stockai.agents.focused_prompts import (
     format_fundamental_prompt,
@@ -26,8 +37,6 @@ from stockai.agents.focused_prompts import (
 from stockai.config import get_settings
 from stockai.scoring.analyzer import AnalysisResult
 from stockai.scoring.trade_plan import calculate_position_with_plan
-
-logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -88,7 +97,16 @@ class FocusedValidator:
         Args:
             model_name: Google AI model to use (default: gemini-1.5-flash for speed)
             timeout: Timeout for each agent in seconds (default: 30s)
+
+        Raises:
+            ImportError: If langchain dependencies are not installed
         """
+        if not HAS_LANGCHAIN:
+            raise ImportError(
+                "LangChain dependencies are required for the validator. "
+                "Install with: pip install stockai[ai]"
+            )
+
         settings = get_settings()
         self.llm = ChatGoogleGenerativeAI(
             model=model_name,

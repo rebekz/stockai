@@ -10,6 +10,8 @@ Coordinates 7 specialized agents for comprehensive stock analysis:
 - Trading Execution: Final signal generation
 
 Uses LangGraph for workflow orchestration with parallel and sequential execution.
+
+Requires the 'ai' optional dependency: pip install stockai[ai]
 """
 
 import json
@@ -18,19 +20,28 @@ import re
 from datetime import datetime
 from typing import Annotated, Any, TypedDict
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_core.tools import BaseTool
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.graph import END, StateGraph
-from langgraph.graph.message import add_messages
+logger = logging.getLogger(__name__)
+
+# Check for langchain dependencies (optional)
+try:
+    from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+    from langchain_core.tools import BaseTool
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langgraph.graph import END, StateGraph
+    from langgraph.graph.message import add_messages
+    HAS_LANGCHAIN = True
+except ImportError:
+    HAS_LANGCHAIN = False
+    BaseMessage = Any
+    HumanMessage = Any
+    SystemMessage = Any
+    BaseTool = Any
 
 from stockai.agents.config import AgentConfig, get_agent_config
 from stockai.agents.prompts import ORCHESTRATOR_PROMPT
 from stockai.agents.subagents import get_all_subagents, get_subagent
 from stockai.agents.tools import get_agent_tools
 from stockai.config import get_settings
-
-logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -708,7 +719,7 @@ Provide your analysis following your standard output format. Include a score fro
 def create_trading_orchestrator(
     model_name: str | None = None,
     config: AgentConfig | None = None,
-) -> TradingOrchestrator:
+) -> "TradingOrchestrator":
     """Create a trading orchestrator instance.
 
     Args:
@@ -717,7 +728,15 @@ def create_trading_orchestrator(
 
     Returns:
         Configured TradingOrchestrator
+
+    Raises:
+        ImportError: If langchain dependencies are not installed
     """
+    if not HAS_LANGCHAIN:
+        raise ImportError(
+            "LangChain dependencies are required for the trading orchestrator. "
+            "Install with: pip install stockai[ai]"
+        )
     return TradingOrchestrator(config=config, model_name=model_name)
 
 

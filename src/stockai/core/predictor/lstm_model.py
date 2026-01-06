@@ -18,52 +18,58 @@ try:
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
+    torch = None
+    nn = None
 
 from stockai.core.predictor.features import FeatureEngineer, create_target, ALL_FEATURES
 
 logger = logging.getLogger(__name__)
 
 
-class LSTMNetwork(nn.Module):
-    """LSTM neural network for sequence classification."""
+# Only define LSTMNetwork when PyTorch is available
+if HAS_TORCH:
+    class LSTMNetwork(nn.Module):
+        """LSTM neural network for sequence classification."""
 
-    def __init__(
-        self,
-        input_size: int,
-        hidden_size: int = 64,
-        num_layers: int = 2,
-        dropout: float = 0.2,
-    ):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
+        def __init__(
+            self,
+            input_size: int,
+            hidden_size: int = 64,
+            num_layers: int = 2,
+            dropout: float = 0.2,
+        ):
+            super().__init__()
+            self.hidden_size = hidden_size
+            self.num_layers = num_layers
 
-        self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0,
-        )
+            self.lstm = nn.LSTM(
+                input_size=input_size,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0,
+            )
 
-        self.fc = nn.Sequential(
-            nn.Linear(hidden_size, 32),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(32, 1),
-            nn.Sigmoid(),
-        )
+            self.fc = nn.Sequential(
+                nn.Linear(hidden_size, 32),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(32, 1),
+                nn.Sigmoid(),
+            )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x shape: (batch, seq_len, features)
-        lstm_out, _ = self.lstm(x)
-        # Use last time step
-        last_output = lstm_out[:, -1, :]
-        return self.fc(last_output).squeeze(-1)
+        def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+            # x shape: (batch, seq_len, features)
+            lstm_out, _ = self.lstm(x)
+            # Use last time step
+            last_output = lstm_out[:, -1, :]
+            return self.fc(last_output).squeeze(-1)
 
-    def set_inference_mode(self):
-        """Set model to inference/evaluation mode."""
-        self.train(False)
+        def set_inference_mode(self):
+            """Set model to inference/evaluation mode."""
+            self.train(False)
+else:
+    LSTMNetwork = None  # type: ignore
 
 
 class LSTMPredictor:

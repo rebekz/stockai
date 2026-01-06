@@ -1,14 +1,26 @@
 """Agent Tools.
 
 Wraps StockAI functionality as LangChain tools for agent use.
+
+Requires the 'ai' optional dependency: pip install stockai[ai]
 """
 
 import logging
 from typing import Any
 
-from langchain_core.tools import tool
-
 logger = logging.getLogger(__name__)
+
+# Lazy import for langchain (optional dependency)
+try:
+    from langchain_core.tools import tool
+    HAS_LANGCHAIN = True
+except ImportError:
+    HAS_LANGCHAIN = False
+    # Create a dummy decorator if langchain is not installed
+    def tool(func):
+        """Dummy tool decorator when langchain is not installed."""
+        func._is_tool = True
+        return func
 
 
 # =============================================================================
@@ -465,7 +477,16 @@ def get_agent_tools(agent_type: str | None = None) -> list:
 
     Returns:
         List of LangChain tools for the agent
+
+    Raises:
+        ImportError: If langchain is not installed
     """
+    if not HAS_LANGCHAIN:
+        raise ImportError(
+            "LangChain is required for agent tools. "
+            "Install with: pip install stockai[ai]"
+        )
+
     if agent_type is None:
         return ALL_TOOLS
 

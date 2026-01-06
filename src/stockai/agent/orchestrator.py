@@ -5,6 +5,8 @@ Planning → Action → Validation → Answer
 
 Uses LangChain with Google Gemini for LLM capabilities
 and LangGraph for workflow orchestration.
+
+Requires the 'ai' optional dependency: pip install stockai[ai]
 """
 
 import json
@@ -13,9 +15,19 @@ import re
 from datetime import datetime
 from typing import Any, Callable
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.graph import END, StateGraph
+logger = logging.getLogger(__name__)
+
+# Check for langchain dependencies (optional)
+try:
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langgraph.graph import END, StateGraph
+    HAS_LANGCHAIN = True
+except ImportError:
+    HAS_LANGCHAIN = False
+    AIMessage = Any
+    HumanMessage = Any
+    SystemMessage = Any
 
 from stockai.agent.prompts import (
     SYSTEM_PROMPT,
@@ -26,8 +38,6 @@ from stockai.agent.prompts import (
 )
 from stockai.agent.state import AgentState, SessionManager, create_initial_state
 from stockai.config import get_settings
-
-logger = logging.getLogger(__name__)
 
 
 class StockAIAgent:
@@ -59,7 +69,16 @@ class StockAIAgent:
             model_name: LLM model to use (default from settings)
             tools: Dictionary of tool functions
             session_manager: Session persistence manager
+
+        Raises:
+            ImportError: If langchain dependencies are not installed
         """
+        if not HAS_LANGCHAIN:
+            raise ImportError(
+                "LangChain dependencies are required for the agent. "
+                "Install with: pip install stockai[ai]"
+            )
+
         settings = get_settings()
         self.model_name = model_name or settings.model
 
