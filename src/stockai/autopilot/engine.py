@@ -3,21 +3,28 @@
 Coordinates the daily trading workflow:
 1. SCAN: Load portfolio, fetch prices, calculate scores
 2. SIGNAL: Generate BUY/SELL signals based on thresholds
-3. SIZING: Calculate safe position sizes
-4. EXECUTE: Paper trading execution
-5. REPORT: Display and log results
+3. AI GATE: Validate signals with 7-agent AI orchestrator (optional)
+4. SIZING: Calculate safe position sizes (approved signals only)
+5. EXECUTE: Paper trading execution
+6. REPORT: Display and log results with AI insights
 """
 
+from __future__ import annotations
+
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, date
 from decimal import Decimal
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import logging
 import pytz
 
+if TYPE_CHECKING:
+    from stockai.autopilot.validator import AIValidator, ValidationResult
+
 from stockai.data.database import get_session
-from stockai.data.models import AutopilotRun, AutopilotTrade
+from stockai.data.models import AutopilotRun, AutopilotTrade, AutopilotValidation
 from stockai.data.sources.idx import IDXIndexSource
 from stockai.data.sources.yahoo import YahooFinanceSource
 from stockai.scoring.factors import score_stock, FactorScores
@@ -63,10 +70,17 @@ class AutopilotConfig:
     # Execution mode
     dry_run: bool = False
 
+    # AI Validation (Phase 3: AI Gate)
+    ai_enabled: bool = True  # Enable AI validation
+    ai_buy_threshold: float = 6.0  # AI score >= 6.0 for BUY approval
+    ai_sell_threshold: float = 5.0  # AI score <= 5.0 for SELL confirmation
+    ai_concurrency: int = 3  # Parallel validation limit
+    ai_verbose: bool = False  # Show detailed agent analysis
+
 
 @dataclass
 class TradeSignal:
-    """A trade signal with position sizing."""
+    """A trade signal with position sizing and AI validation."""
 
     symbol: str
     action: str  # BUY or SELL
@@ -79,6 +93,15 @@ class TradeSignal:
     target: float | None
     reason: str
     factor_scores: FactorScores | None = None
+
+    # AI Validation fields
+    ai_validated: bool = False  # Has been validated by AI
+    ai_score: float | None = None  # AI composite score (0-10)
+    ai_approved: bool | None = None  # AI approval status
+    ai_recommendation: str | None = None  # AI recommendation string
+    ai_rejection_reason: str | None = None  # Reason if rejected
+    ai_key_reasons: list[str] = field(default_factory=list)  # AI insights
+    ai_risk_factors: list[str] = field(default_factory=list)  # AI risks
 
 
 @dataclass
@@ -93,9 +116,16 @@ class AutopilotResult:
     stocks_scanned: int = 0
     scores: list[FactorScores] = field(default_factory=list)
 
-    # Signals
+    # Signals (before AI validation)
     buy_signals: list[TradeSignal] = field(default_factory=list)
     sell_signals: list[TradeSignal] = field(default_factory=list)
+
+    # AI Validation results
+    ai_enabled: bool = False
+    ai_approved_buys: list[TradeSignal] = field(default_factory=list)
+    ai_rejected_buys: list[TradeSignal] = field(default_factory=list)
+    ai_approved_sells: list[TradeSignal] = field(default_factory=list)
+    ai_rejected_sells: list[TradeSignal] = field(default_factory=list)
 
     # Execution
     executed_buys: list[TradeSignal] = field(default_factory=list)
@@ -114,7 +144,7 @@ class AutopilotResult:
 
 
 class AutopilotEngine:
-    """Main autopilot trading engine."""
+    """Main autopilot trading engine with AI validation."""
 
     def __init__(self, config: AutopilotConfig | None = None):
         """Initialize autopilot engine.
@@ -130,6 +160,23 @@ class AutopilotEngine:
         # Paper portfolio state (would load from DB in production)
         self.positions: dict[str, dict] = {}
         self.cash = self.config.capital
+
+        # AI Validator (lazy-loaded to avoid LLM init overhead)
+        self._ai_validator: AIValidator | None = None
+
+    @property
+    def ai_validator(self) -> AIValidator:
+        """Lazy-load AI validator to avoid LLM initialization on import."""
+        if self._ai_validator is None:
+            from stockai.autopilot.validator import AIValidator, AIValidatorConfig
+
+            validator_config = AIValidatorConfig(
+                buy_threshold=self.config.ai_buy_threshold,
+                sell_threshold=self.config.ai_sell_threshold,
+                max_concurrent=self.config.ai_concurrency,
+            )
+            self._ai_validator = AIValidator(config=validator_config)
+        return self._ai_validator
 
     def run(
         self,
@@ -147,6 +194,7 @@ class AutopilotEngine:
             run_date=datetime.now(TIMEZONE),
             index_scanned=self.config.index.value,
             capital=self.config.capital,
+            ai_enabled=self.config.ai_enabled,
         )
 
         # Load portfolio if provided
@@ -170,20 +218,47 @@ class AutopilotEngine:
         result.buy_signals = buy_signals
         result.sell_signals = sell_signals
 
-        # Phase 3: POSITION SIZING (for buys)
-        logger.info("Calculating position sizes...")
-        sized_buys = self._size_positions(buy_signals)
-        result.buy_signals = sized_buys
+        # Phase 3: AI GATE (optional)
+        if self.config.ai_enabled and (buy_signals or sell_signals):
+            logger.info("Running AI validation...")
+            approved_buys, rejected_buys = self._validate_signals_with_ai(buy_signals)
+            approved_sells, rejected_sells = self._validate_signals_with_ai(sell_signals)
 
-        # Phase 4: EXECUTION
+            result.ai_approved_buys = approved_buys
+            result.ai_rejected_buys = rejected_buys
+            result.ai_approved_sells = approved_sells
+            result.ai_rejected_sells = rejected_sells
+
+            # Warn if all signals were rejected by AI
+            total_signals = len(buy_signals) + len(sell_signals)
+            total_approved = len(approved_buys) + len(approved_sells)
+            if total_signals > 0 and total_approved == 0:
+                logger.warning(
+                    f"All {total_signals} signals were rejected by AI validation. "
+                    "Consider using --no-ai flag if AI validation is unavailable or too strict."
+                )
+
+            # Only size and execute approved signals
+            signals_to_size = approved_buys
+            signals_to_sell = approved_sells
+        else:
+            # AI disabled - all signals proceed
+            signals_to_size = buy_signals
+            signals_to_sell = sell_signals
+
+        # Phase 4: POSITION SIZING (for approved buys only)
+        logger.info("Calculating position sizes...")
+        sized_buys = self._size_positions(signals_to_size)
+
+        # Phase 5: EXECUTION
         if not self.config.dry_run:
             logger.info("Executing trades...")
             # Execute sells first (free up capital)
-            result.executed_sells = self._execute_sells(sell_signals)
+            result.executed_sells = self._execute_sells(signals_to_sell)
             # Then execute buys (by score descending)
             result.executed_buys = self._execute_buys(sized_buys)
 
-        # Phase 5: REPORTING
+        # Phase 6: REPORTING
         result.portfolio_value = self._calculate_portfolio_value()
         result.cash_remaining = self.cash
         result.positions_count = len(self.positions)
@@ -196,8 +271,66 @@ class AutopilotEngine:
 
         return result
 
+    def _validate_signals_with_ai(
+        self, signals: list[TradeSignal]
+    ) -> tuple[list[TradeSignal], list[TradeSignal]]:
+        """Validate signals with AI orchestrator.
+
+        Args:
+            signals: List of trade signals to validate
+
+        Returns:
+            Tuple of (approved_signals, rejected_signals)
+        """
+        if not signals:
+            return [], []
+
+        # Prepare batch for validation
+        validation_requests = [
+            (s.symbol, s.action, s.score) for s in signals
+        ]
+
+        # Run async validation
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        validation_results = loop.run_until_complete(
+            self.ai_validator.validate_signals_batch(validation_requests)
+        )
+
+        # Apply validation results to signals
+        approved = []
+        rejected = []
+
+        for signal, result in zip(signals, validation_results):
+            # Update signal with AI results
+            signal.ai_validated = True
+            signal.ai_score = result.ai_composite_score
+            signal.ai_approved = result.is_approved
+            signal.ai_recommendation = result.recommendation
+            signal.ai_key_reasons = result.key_reasons
+            signal.ai_risk_factors = result.risk_factors
+
+            if result.is_approved:
+                approved.append(signal)
+                logger.info(
+                    f"{signal.action} {signal.symbol}: AI Score {result.ai_composite_score:.1f} ✓ APPROVED"
+                )
+            else:
+                signal.ai_rejection_reason = result.rejection_reason
+                rejected.append(signal)
+                logger.info(
+                    f"{signal.action} {signal.symbol}: AI Score {result.ai_composite_score:.1f} ✗ REJECTED "
+                    f"({result.rejection_reason})"
+                )
+
+        return approved, rejected
+
     def _save_run_to_db(self, result: AutopilotResult) -> int | None:
-        """Save autopilot run and trades to database.
+        """Save autopilot run, trades, and AI validations to database.
 
         Args:
             result: AutopilotResult to save
@@ -222,7 +355,7 @@ class AutopilotEngine:
             session.add(run)
             session.flush()  # Get run ID
 
-            # Save executed buy trades
+            # Save executed buy trades with AI validation data
             for trade in result.executed_buys:
                 trade_record = AutopilotTrade(
                     run_id=run.id,
@@ -236,10 +369,16 @@ class AutopilotEngine:
                     reason=trade.reason,
                     stop_loss=Decimal(str(trade.stop_loss)) if trade.stop_loss else None,
                     target=Decimal(str(trade.target)) if trade.target else None,
+                    # AI validation fields
+                    ai_validated=trade.ai_validated,
+                    ai_composite_score=trade.ai_score,
+                    ai_recommendation=trade.ai_recommendation,
+                    ai_approved=trade.ai_approved,
+                    ai_rejection_reason=trade.ai_rejection_reason,
                 )
                 session.add(trade_record)
 
-            # Save executed sell trades
+            # Save executed sell trades with AI validation data
             for trade in result.executed_sells:
                 trade_record = AutopilotTrade(
                     run_id=run.id,
@@ -251,8 +390,35 @@ class AutopilotEngine:
                     total_value=Decimal(str(trade.position_value)),
                     score=trade.score if trade.score else None,
                     reason=trade.reason,
+                    # AI validation fields
+                    ai_validated=trade.ai_validated,
+                    ai_composite_score=trade.ai_score,
+                    ai_recommendation=trade.ai_recommendation,
+                    ai_approved=trade.ai_approved,
+                    ai_rejection_reason=trade.ai_rejection_reason,
                 )
                 session.add(trade_record)
+
+            # Save all AI validations (including rejections) for tracking
+            if result.ai_enabled:
+                all_validated_signals = (
+                    result.ai_approved_buys +
+                    result.ai_rejected_buys +
+                    result.ai_approved_sells +
+                    result.ai_rejected_sells
+                )
+                for signal in all_validated_signals:
+                    validation_record = AutopilotValidation(
+                        run_id=run.id,
+                        symbol=signal.symbol,
+                        signal_type=signal.action,
+                        autopilot_score=signal.score,
+                        ai_composite_score=signal.ai_score,
+                        ai_recommendation=signal.ai_recommendation,
+                        is_approved=signal.ai_approved if signal.ai_approved is not None else False,
+                        rejection_reason=signal.ai_rejection_reason,
+                    )
+                    session.add(validation_record)
 
             session.commit()
             logger.info(f"Saved autopilot run {run.id} to database")
@@ -667,35 +833,87 @@ class AutopilotEngine:
         return alerts
 
 
-def format_autopilot_result(result: AutopilotResult) -> str:
+def format_autopilot_result(result: AutopilotResult, verbose: bool = False) -> str:
     """Format autopilot result for CLI display.
 
     Args:
         result: AutopilotResult to format
+        verbose: Show detailed AI analysis
 
     Returns:
         Formatted string
     """
+    ai_status = "AI: ON" if result.ai_enabled else "AI: OFF"
     lines = [
         "=" * 60,
         f"AUTOPILOT RUN - {result.run_date.strftime('%A, %d %B %Y')}",
-        f"   Index: {result.index_scanned} | Capital: Rp {result.capital:,.0f}",
+        f"   Index: {result.index_scanned} | Capital: Rp {result.capital:,.0f} | {ai_status}",
         "=" * 60,
         "",
         f"SCANNED: {result.stocks_scanned} stocks | SIGNALS: {len(result.buy_signals)} BUY, {len(result.sell_signals)} SELL",
     ]
 
+    # AI Validation summary (if enabled)
+    if result.ai_enabled:
+        approved_buys = len(result.ai_approved_buys)
+        rejected_buys = len(result.ai_rejected_buys)
+        approved_sells = len(result.ai_approved_sells)
+        rejected_sells = len(result.ai_rejected_sells)
+
+        lines.extend([
+            "",
+            "AI VALIDATION:",
+            f"   BUY: {approved_buys} approved, {rejected_buys} rejected",
+            f"   SELL: {approved_sells} confirmed, {rejected_sells} rejected",
+        ])
+
+        # Show BUY signal details
+        if result.ai_approved_buys:
+            lines.extend(["", "BUY SIGNALS (AI APPROVED):"])
+            for trade in result.ai_approved_buys:
+                ai_info = f"AI: {trade.ai_score:.1f}" if trade.ai_score else ""
+                reasons = ", ".join(trade.ai_key_reasons[:2]) if trade.ai_key_reasons else ""
+                lines.append(f"   {trade.symbol}: Score {trade.score:.0f} → {ai_info} ✓ ({reasons})")
+
+        if result.ai_rejected_buys:
+            lines.extend(["", "BUY SIGNALS (AI REJECTED):"])
+            for trade in result.ai_rejected_buys:
+                ai_info = f"AI: {trade.ai_score:.1f}" if trade.ai_score else ""
+                reason = trade.ai_rejection_reason or "Unknown"
+                lines.append(f"   {trade.symbol}: Score {trade.score:.0f} → {ai_info} ✗ ({reason})")
+
+        # Show SELL signal details
+        if result.ai_approved_sells:
+            lines.extend(["", "SELL SIGNALS (AI CONFIRMED):"])
+            for trade in result.ai_approved_sells:
+                ai_info = f"AI: {trade.ai_score:.1f}" if trade.ai_score else ""
+                lines.append(f"   {trade.symbol}: Score {trade.score:.0f} → {ai_info} ✓")
+
+        if result.ai_rejected_sells:
+            lines.extend(["", "SELL SIGNALS (AI REJECTED):"])
+            for trade in result.ai_rejected_sells:
+                ai_info = f"AI: {trade.ai_score:.1f}" if trade.ai_score else ""
+                reason = trade.ai_rejection_reason or "Unknown"
+                lines.append(f"   {trade.symbol}: Score {trade.score:.0f} → {ai_info} ✗ ({reason})")
+
     # Sell executions
     if result.executed_sells:
         lines.extend(["", "SELL EXECUTED:"])
         for trade in result.executed_sells:
-            lines.append(f"   {trade.symbol}: {trade.lots} lots @ Rp {trade.current_price:,.0f} ({trade.reason})")
+            ai_info = f" [AI: {trade.ai_score:.1f}]" if trade.ai_validated and trade.ai_score else ""
+            lines.append(f"   {trade.symbol}: {trade.lots} lots @ Rp {trade.current_price:,.0f} ({trade.reason}){ai_info}")
 
     # Buy executions
     if result.executed_buys:
         lines.extend(["", "BUY EXECUTED:"])
         for trade in result.executed_buys:
-            lines.append(f"   {trade.symbol}: {trade.lots} lots @ Rp {trade.current_price:,.0f} (Score: {trade.score:.0f})")
+            ai_info = f" [AI: {trade.ai_score:.1f}]" if trade.ai_validated and trade.ai_score else ""
+            lines.append(f"   {trade.symbol}: {trade.lots} lots @ Rp {trade.current_price:,.0f} (Score: {trade.score:.0f}){ai_info}")
+
+            # Verbose mode: show AI insights
+            if verbose and trade.ai_key_reasons:
+                for reason in trade.ai_key_reasons[:3]:
+                    lines.append(f"      • {reason}")
 
     # If no trades
     if not result.executed_sells and not result.executed_buys:

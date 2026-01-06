@@ -565,3 +565,484 @@ class TestPaperPortfolio:
         )
 
         assert portfolio.total_pnl_pct == pytest.approx(5.0)
+
+
+# ============================================================================
+# AI VALIDATION TESTS
+# ============================================================================
+
+
+class TestAIValidatorConfig:
+    """Test AIValidatorConfig dataclass."""
+
+    def test_default_config_values(self):
+        """Test default AI validator configuration values."""
+        from stockai.autopilot.validator import AIValidatorConfig
+
+        config = AIValidatorConfig()
+
+        assert config.buy_threshold == 6.0
+        assert config.sell_threshold == 5.0
+        assert config.max_concurrent == 3
+        assert config.per_stock_timeout == 60.0
+        assert config.max_retries == 1
+        assert config.retry_delay == 2.0
+
+    def test_custom_config_values(self):
+        """Test custom AI validator configuration."""
+        from stockai.autopilot.validator import AIValidatorConfig
+
+        config = AIValidatorConfig(
+            buy_threshold=7.0,
+            sell_threshold=4.0,
+            max_concurrent=5,
+        )
+
+        assert config.buy_threshold == 7.0
+        assert config.sell_threshold == 4.0
+        assert config.max_concurrent == 5
+
+
+class TestValidationResult:
+    """Test ValidationResult dataclass."""
+
+    def test_validation_result_creation(self):
+        """Test ValidationResult can be created with all fields."""
+        from stockai.autopilot.validator import ValidationResult
+
+        result = ValidationResult(
+            symbol="PWON",
+            signal_type="BUY",
+            autopilot_score=78.0,
+            ai_composite_score=7.2,
+            is_approved=True,
+            recommendation="STRONG_BUY",
+            fundamental_score=8.0,
+            technical_score=7.5,
+            sentiment_score=6.5,
+        )
+
+        assert result.symbol == "PWON"
+        assert result.signal_type == "BUY"
+        assert result.autopilot_score == 78.0
+        assert result.ai_composite_score == 7.2
+        assert result.is_approved is True
+        assert result.recommendation == "STRONG_BUY"
+        assert result.fundamental_score == 8.0
+
+    def test_validation_result_with_rejection(self):
+        """Test ValidationResult with rejection reason."""
+        from stockai.autopilot.validator import ValidationResult
+
+        result = ValidationResult(
+            symbol="TLKM",
+            signal_type="BUY",
+            autopilot_score=72.0,
+            ai_composite_score=5.4,
+            is_approved=False,
+            recommendation="HOLD",
+            rejection_reason="AI score 5.4 below BUY threshold 6.0",
+        )
+
+        assert result.is_approved is False
+        assert result.rejection_reason is not None
+        assert "below BUY threshold" in result.rejection_reason
+
+    def test_validation_result_default_lists(self):
+        """Test ValidationResult default lists are empty."""
+        from stockai.autopilot.validator import ValidationResult
+
+        result = ValidationResult(
+            symbol="TEST",
+            signal_type="BUY",
+            autopilot_score=50.0,
+            ai_composite_score=5.0,
+            is_approved=False,
+            recommendation="HOLD",
+        )
+
+        assert result.key_reasons == []
+        assert result.risk_factors == []
+
+
+class TestAIValidator:
+    """Test AIValidator class."""
+
+    @pytest.fixture
+    def mock_orchestrator(self):
+        """Create mock TradingOrchestrator."""
+        mock = MagicMock()
+        mock.run.return_value = {
+            "composite_score": 7.5,
+            "recommendation": "BUY",
+            "answer": "Strong momentum indicators. Solid fundamentals.",
+            "fundamental_analysis": {"score": 8.0},
+            "technical_analysis": {"score": 7.5},
+            "sentiment_analysis": {"score": 6.5},
+            "portfolio_recommendation": {"score": 7.0},
+            "risk_assessment": {"score": 6.0},
+        }
+        return mock
+
+    def test_validator_initialization(self):
+        """Test AIValidator initializes with default config."""
+        from stockai.autopilot.validator import AIValidator
+
+        validator = AIValidator()
+
+        assert validator.config is not None
+        assert validator.config.buy_threshold == 6.0
+        assert validator.config.sell_threshold == 5.0
+
+    def test_validator_custom_config(self):
+        """Test AIValidator with custom configuration."""
+        from stockai.autopilot.validator import AIValidator, AIValidatorConfig
+
+        config = AIValidatorConfig(buy_threshold=7.0)
+        validator = AIValidator(config=config)
+
+        assert validator.config.buy_threshold == 7.0
+
+    @pytest.mark.asyncio
+    async def test_buy_approved_when_ai_score_above_threshold(self, mock_orchestrator):
+        """Test BUY signal is approved when AI score >= threshold."""
+        from stockai.autopilot.validator import AIValidator, AIValidatorConfig
+
+        config = AIValidatorConfig(buy_threshold=6.0)
+        validator = AIValidator(config=config, orchestrator=mock_orchestrator)
+
+        result = await validator.validate_signal("PWON", "BUY", 78.0)
+
+        assert result.is_approved is True
+        assert result.ai_composite_score == 7.5
+        assert result.rejection_reason is None
+
+    @pytest.mark.asyncio
+    async def test_buy_rejected_when_ai_score_below_threshold(self, mock_orchestrator):
+        """Test BUY signal is rejected when AI score < threshold."""
+        from stockai.autopilot.validator import AIValidator, AIValidatorConfig
+
+        # Mock returns low score
+        mock_orchestrator.run.return_value = {
+            "composite_score": 5.2,
+            "recommendation": "HOLD",
+        }
+
+        config = AIValidatorConfig(buy_threshold=6.0)
+        validator = AIValidator(config=config, orchestrator=mock_orchestrator)
+
+        result = await validator.validate_signal("TLKM", "BUY", 72.0)
+
+        assert result.is_approved is False
+        assert result.ai_composite_score == 5.2
+        assert "below BUY threshold" in result.rejection_reason
+
+    @pytest.mark.asyncio
+    async def test_sell_confirmed_when_ai_score_below_threshold(self, mock_orchestrator):
+        """Test SELL signal is confirmed when AI score <= threshold."""
+        from stockai.autopilot.validator import AIValidator, AIValidatorConfig
+
+        mock_orchestrator.run.return_value = {
+            "composite_score": 4.1,
+            "recommendation": "SELL",
+        }
+
+        config = AIValidatorConfig(sell_threshold=5.0)
+        validator = AIValidator(config=config, orchestrator=mock_orchestrator)
+
+        result = await validator.validate_signal("BRPT", "SELL", 43.0)
+
+        assert result.is_approved is True
+        assert result.ai_composite_score == 4.1
+        assert result.rejection_reason is None
+
+    @pytest.mark.asyncio
+    async def test_sell_rejected_when_ai_score_above_threshold(self, mock_orchestrator):
+        """Test SELL signal is rejected when AI score > threshold."""
+        from stockai.autopilot.validator import AIValidator, AIValidatorConfig
+
+        mock_orchestrator.run.return_value = {
+            "composite_score": 6.5,
+            "recommendation": "HOLD",
+        }
+
+        config = AIValidatorConfig(sell_threshold=5.0)
+        validator = AIValidator(config=config, orchestrator=mock_orchestrator)
+
+        result = await validator.validate_signal("BBCA", "SELL", 48.0)
+
+        assert result.is_approved is False
+        assert "above SELL threshold" in result.rejection_reason
+
+    @pytest.mark.asyncio
+    async def test_score_exactly_at_threshold_is_approved(self, mock_orchestrator):
+        """Test BUY at exactly threshold (6.0) is approved (>= is inclusive)."""
+        from stockai.autopilot.validator import AIValidator, AIValidatorConfig
+
+        mock_orchestrator.run.return_value = {
+            "composite_score": 6.0,  # Exactly at threshold
+            "recommendation": "BUY",
+        }
+
+        config = AIValidatorConfig(buy_threshold=6.0)
+        validator = AIValidator(config=config, orchestrator=mock_orchestrator)
+
+        result = await validator.validate_signal("TEST", "BUY", 70.0)
+
+        assert result.is_approved is True
+
+    @pytest.mark.asyncio
+    async def test_api_failure_marks_signal_unavailable(self, mock_orchestrator):
+        """Test API failure creates unavailable result."""
+        from stockai.autopilot.validator import AIValidator
+
+        mock_orchestrator.run.side_effect = Exception("API Error")
+        validator = AIValidator(orchestrator=mock_orchestrator)
+
+        result = await validator.validate_signal("FAIL", "BUY", 75.0)
+
+        assert result.is_approved is False
+        assert result.recommendation == "AI_UNAVAILABLE"
+        assert "AI unavailable" in result.rejection_reason
+
+    @pytest.mark.asyncio
+    async def test_batch_validation(self, mock_orchestrator):
+        """Test batch validation with multiple signals."""
+        from stockai.autopilot.validator import AIValidator
+
+        validator = AIValidator(orchestrator=mock_orchestrator)
+
+        signals = [
+            ("PWON", "BUY", 78.0),
+            ("TLKM", "BUY", 72.0),
+            ("BBCA", "BUY", 75.0),
+        ]
+
+        results = await validator.validate_signals_batch(signals)
+
+        assert len(results) == 3
+        assert all(r.is_approved for r in results)  # All should pass (score 7.5)
+
+    @pytest.mark.asyncio
+    async def test_batch_validation_empty_list(self, mock_orchestrator):
+        """Test batch validation with empty list returns empty."""
+        from stockai.autopilot.validator import AIValidator
+
+        validator = AIValidator(orchestrator=mock_orchestrator)
+        results = await validator.validate_signals_batch([])
+
+        assert results == []
+
+
+class TestCreateValidator:
+    """Test create_validator factory function."""
+
+    def test_create_validator_with_defaults(self):
+        """Test create_validator with default parameters."""
+        from stockai.autopilot.validator import create_validator
+
+        validator = create_validator()
+
+        assert validator.config.buy_threshold == 6.0
+        assert validator.config.sell_threshold == 5.0
+        assert validator.config.max_concurrent == 3
+
+    def test_create_validator_with_custom_params(self):
+        """Test create_validator with custom parameters."""
+        from stockai.autopilot.validator import create_validator
+
+        validator = create_validator(
+            buy_threshold=7.5,
+            sell_threshold=4.0,
+            max_concurrent=5,
+        )
+
+        assert validator.config.buy_threshold == 7.5
+        assert validator.config.sell_threshold == 4.0
+        assert validator.config.max_concurrent == 5
+
+
+class TestAutopilotConfigAI:
+    """Test AI-related AutopilotConfig fields."""
+
+    def test_default_ai_config_values(self):
+        """Test default AI configuration in AutopilotConfig."""
+        from stockai.autopilot.engine import AutopilotConfig
+
+        config = AutopilotConfig()
+
+        assert config.ai_enabled is True
+        assert config.ai_buy_threshold == 6.0
+        assert config.ai_sell_threshold == 5.0
+        assert config.ai_concurrency == 3
+        assert config.ai_verbose is False
+
+    def test_custom_ai_config_values(self):
+        """Test custom AI configuration in AutopilotConfig."""
+        from stockai.autopilot.engine import AutopilotConfig
+
+        config = AutopilotConfig(
+            ai_enabled=False,
+            ai_buy_threshold=7.0,
+            ai_concurrency=5,
+        )
+
+        assert config.ai_enabled is False
+        assert config.ai_buy_threshold == 7.0
+        assert config.ai_concurrency == 5
+
+
+class TestTradeSignalAIFields:
+    """Test AI-related TradeSignal fields."""
+
+    def test_trade_signal_ai_fields_defaults(self):
+        """Test TradeSignal AI fields have correct defaults."""
+        from stockai.autopilot.engine import TradeSignal
+
+        signal = TradeSignal(
+            symbol="TEST",
+            action="BUY",
+            score=70.0,
+            current_price=100.0,
+            lots=10,
+            shares=1000,
+            position_value=100_000.0,
+            stop_loss=90.0,
+            target=120.0,
+            reason="Score 70 > 70",
+        )
+
+        assert signal.ai_validated is False
+        assert signal.ai_score is None
+        assert signal.ai_approved is None
+        assert signal.ai_recommendation is None
+        assert signal.ai_rejection_reason is None
+        assert signal.ai_key_reasons == []
+        assert signal.ai_risk_factors == []
+
+    def test_trade_signal_with_ai_validation(self):
+        """Test TradeSignal with AI validation fields populated."""
+        from stockai.autopilot.engine import TradeSignal
+
+        signal = TradeSignal(
+            symbol="PWON",
+            action="BUY",
+            score=78.0,
+            current_price=340.0,
+            lots=58,
+            shares=5800,
+            position_value=1_972_000.0,
+            stop_loss=310.0,
+            target=385.0,
+            reason="Score 78 > 70",
+            ai_validated=True,
+            ai_score=7.2,
+            ai_approved=True,
+            ai_recommendation="STRONG_BUY",
+            ai_key_reasons=["Strong momentum", "Solid fundamentals"],
+        )
+
+        assert signal.ai_validated is True
+        assert signal.ai_score == 7.2
+        assert signal.ai_approved is True
+        assert len(signal.ai_key_reasons) == 2
+
+
+class TestAutopilotValidationModel:
+    """Test AutopilotValidation database model."""
+
+    def test_validation_model_creation(self):
+        """Test AutopilotValidation model can be instantiated."""
+        from stockai.data.models import AutopilotValidation
+
+        validation = AutopilotValidation(
+            run_id=1,
+            symbol="PWON",
+            signal_type="BUY",
+            autopilot_score=78.0,
+            ai_composite_score=7.2,
+            ai_fundamental_score=8.0,
+            ai_technical_score=7.5,
+            ai_sentiment_score=6.5,
+            ai_risk_score=6.0,
+            ai_recommendation="STRONG_BUY",
+            is_approved=True,
+        )
+
+        assert validation.symbol == "PWON"
+        assert validation.signal_type == "BUY"
+        assert validation.ai_composite_score == 7.2
+        assert validation.is_approved is True
+
+    def test_validation_model_with_rejection(self):
+        """Test AutopilotValidation model with rejection."""
+        from stockai.data.models import AutopilotValidation
+
+        validation = AutopilotValidation(
+            run_id=1,
+            symbol="TLKM",
+            signal_type="BUY",
+            autopilot_score=72.0,
+            ai_composite_score=5.4,
+            ai_recommendation="HOLD",
+            is_approved=False,
+            rejection_reason="AI score 5.4 below BUY threshold 6.0",
+        )
+
+        assert validation.is_approved is False
+        assert validation.rejection_reason is not None
+
+
+class TestAutopilotTradeAIFields:
+    """Test AI fields added to AutopilotTrade model."""
+
+    def test_autopilot_trade_with_ai_fields(self):
+        """Test AutopilotTrade model with AI validation fields."""
+        from stockai.data.models import AutopilotTrade
+
+        trade = AutopilotTrade(
+            run_id=1,
+            symbol="PWON",
+            action="BUY",
+            lots=58,
+            shares=5800,
+            price=Decimal("340"),
+            total_value=Decimal("1972000"),
+            score=78.0,
+            ai_validated=True,
+            ai_composite_score=7.2,
+            ai_fundamental_score=8.0,
+            ai_technical_score=7.5,
+            ai_sentiment_score=6.5,
+            ai_risk_score=6.0,
+            ai_recommendation="STRONG_BUY",
+            ai_approved=True,
+        )
+
+        assert trade.ai_validated is True
+        assert trade.ai_composite_score == 7.2
+        assert trade.ai_approved is True
+
+    def test_autopilot_trade_ai_rejection(self):
+        """Test AutopilotTrade model with AI rejection."""
+        from stockai.data.models import AutopilotTrade
+
+        trade = AutopilotTrade(
+            run_id=1,
+            symbol="TLKM",
+            action="BUY",
+            lots=0,
+            shares=0,
+            price=Decimal("0"),
+            total_value=Decimal("0"),
+            score=72.0,
+            ai_validated=True,
+            ai_composite_score=5.4,
+            ai_recommendation="HOLD",
+            ai_approved=False,
+            ai_rejection_reason="AI score 5.4 below BUY threshold 6.0",
+        )
+
+        assert trade.ai_validated is True
+        assert trade.ai_approved is False
+        assert trade.ai_rejection_reason is not None

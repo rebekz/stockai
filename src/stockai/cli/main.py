@@ -4748,16 +4748,26 @@ def autopilot_run(
     capital: Optional[float] = typer.Option(None, "--capital", "-c", help="Available capital in Rupiah"),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show signals without executing"),
     force: bool = typer.Option(False, "--force", "-f", help="Execute even if already run today"),
+    # AI Validation options
+    ai_enabled: bool = typer.Option(True, "--ai/--no-ai", help="Enable/disable AI validation"),
+    ai_concurrency: int = typer.Option(3, "--ai-concurrency", help="Parallel AI validation limit"),
+    ai_threshold: float = typer.Option(6.0, "--ai-threshold", help="BUY approval threshold (AI score)"),
+    ai_sell_threshold: float = typer.Option(5.0, "--ai-sell-threshold", help="SELL confirmation threshold"),
+    ai_verbose: bool = typer.Option(False, "--ai-verbose", help="Show detailed agent analysis"),
 ) -> None:
     """Execute daily autopilot workflow.
 
-    Scans index stocks, generates signals, and executes paper trades.
+    Scans index stocks, generates signals, validates with AI agents, and executes paper trades.
+    AI agents have veto power - BUY signals require AI score >= threshold to proceed.
 
     Examples:
         stockai autopilot run
         stockai autopilot run --index IDX30
         stockai autopilot run --capital 50000000
         stockai autopilot run --dry-run
+        stockai autopilot run --no-ai              # Skip AI validation
+        stockai autopilot run --ai-threshold 7.0   # Stricter AI approval
+        stockai autopilot run --ai-verbose         # Show agent breakdown
     """
     from stockai.autopilot import AutopilotEngine, AutopilotConfig
     from stockai.autopilot.engine import IndexType, format_autopilot_result
@@ -4787,10 +4797,16 @@ def autopilot_run(
         index=IndexType[index],
         capital=capital,
         dry_run=dry_run,
+        ai_enabled=ai_enabled,
+        ai_buy_threshold=ai_threshold,
+        ai_sell_threshold=ai_sell_threshold,
+        ai_concurrency=ai_concurrency,
+        ai_verbose=ai_verbose,
     )
 
     console.print(f"\n[bold cyan]🤖 AUTOPILOT[/bold cyan] - Scanning {index}...")
-    console.print(f"   Capital: Rp {capital:,.0f} | Dry run: {dry_run}")
+    ai_status = f"AI: [green]ON[/green] (threshold ≥{ai_threshold})" if ai_enabled else "AI: [yellow]OFF[/yellow]"
+    console.print(f"   Capital: Rp {capital:,.0f} | Dry run: {dry_run} | {ai_status}")
     console.print()
 
     with console.status("[bold green]Running autopilot..."):
@@ -4820,6 +4836,80 @@ def autopilot_run(
             )
 
         console.print("[green]✓ Paper portfolio updated[/green]")
+
+
+@autopilot_app.command("validate")
+def autopilot_validate(
+    symbol: str = typer.Argument(..., help="Stock symbol to validate (e.g., TLKM)"),
+    signal_type: str = typer.Option("BUY", "--signal", "-s", help="Signal type: BUY or SELL"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full 7-agent breakdown"),
+) -> None:
+    """Run AI validation on a specific stock.
+
+    Validates the stock using the 7-agent AI orchestrator without running
+    the full autopilot workflow. Useful for manual analysis.
+
+    Examples:
+        stockai autopilot validate TLKM
+        stockai autopilot validate BBCA --signal SELL
+        stockai autopilot validate PWON --verbose
+    """
+    import asyncio
+    from stockai.autopilot.validator import AIValidator, AIValidatorConfig
+
+    symbol = symbol.upper()
+    signal_type = signal_type.upper()
+
+    if signal_type not in ("BUY", "SELL"):
+        console.print(f"[red]Invalid signal type '{signal_type}'. Use BUY or SELL.[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold cyan]🤖 AI VALIDATION[/bold cyan] - {symbol} ({signal_type})")
+    console.print()
+
+    with console.status("[bold green]Running AI analysis..."):
+        config = AIValidatorConfig()
+        validator = AIValidator(config=config)
+        result = asyncio.run(validator.validate_signal(symbol, signal_type, 0.0))
+
+    # Display results
+    status_icon = "[green]✓ APPROVED[/green]" if result.is_approved else "[red]✗ REJECTED[/red]"
+    console.print(f"[bold]Result:[/bold] {status_icon}")
+    console.print(f"[bold]AI Score:[/bold] {result.ai_composite_score:.1f}/10")
+    console.print(f"[bold]Recommendation:[/bold] {result.recommendation}")
+
+    if result.rejection_reason:
+        console.print(f"[bold]Reason:[/bold] [dim]{result.rejection_reason}[/dim]")
+
+    if verbose or result.key_reasons:
+        console.print()
+        if result.key_reasons:
+            console.print("[bold]Key Reasons:[/bold]")
+            for reason in result.key_reasons:
+                console.print(f"  • {reason}")
+
+        if result.risk_factors:
+            console.print("[bold]Risk Factors:[/bold]")
+            for risk in result.risk_factors:
+                console.print(f"  • {risk}")
+
+    if verbose:
+        console.print()
+        console.print("[bold]Agent Scores:[/bold]")
+        if result.fundamental_score is not None:
+            console.print(f"  Fundamental: {result.fundamental_score:.1f}/10")
+        if result.technical_score is not None:
+            console.print(f"  Technical:   {result.technical_score:.1f}/10")
+        if result.sentiment_score is not None:
+            console.print(f"  Sentiment:   {result.sentiment_score:.1f}/10")
+        if result.portfolio_fit_score is not None:
+            console.print(f"  Portfolio:   {result.portfolio_fit_score:.1f}/10")
+        if result.risk_score is not None:
+            console.print(f"  Risk:        {result.risk_score:.1f}/10")
+
+        console.print(f"\n[dim]Validation time: {result.validation_time_ms:.0f}ms[/dim]")
+
+    console.print()
 
 
 @autopilot_app.command("status")

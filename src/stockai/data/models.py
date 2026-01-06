@@ -293,6 +293,9 @@ class AutopilotRun(Base):
     trades = relationship(
         "AutopilotTrade", back_populates="run", cascade="all, delete-orphan"
     )
+    validations = relationship(
+        "AutopilotValidation", back_populates="run", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_autopilot_runs_date", "run_date"),
@@ -322,8 +325,47 @@ class AutopilotTrade(Base):
     target = Column(Numeric(12, 2))
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # AI Validation fields
+    ai_validated = Column(Boolean, default=False)
+    ai_composite_score = Column(Float)
+    ai_fundamental_score = Column(Float)
+    ai_technical_score = Column(Float)
+    ai_sentiment_score = Column(Float)
+    ai_risk_score = Column(Float)
+    ai_recommendation = Column(String(20))
+    ai_approved = Column(Boolean)
+    ai_rejection_reason = Column(String(200))
+
     # Relationships
     run = relationship("AutopilotRun", back_populates="trades")
 
     def __repr__(self) -> str:
         return f"<AutopilotTrade(symbol='{self.symbol}', action='{self.action}', lots={self.lots})>"
+
+
+class AutopilotValidation(Base):
+    """Track all AI validations, including rejections."""
+
+    __tablename__ = "autopilot_validations"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("autopilot_runs.id"), nullable=False, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    signal_type = Column(String(4), nullable=False)  # BUY, SELL
+    autopilot_score = Column(Float)
+    ai_composite_score = Column(Float)
+    ai_fundamental_score = Column(Float)
+    ai_technical_score = Column(Float)
+    ai_sentiment_score = Column(Float)
+    ai_risk_score = Column(Float)
+    ai_recommendation = Column(String(20))
+    is_approved = Column(Boolean, nullable=False)
+    rejection_reason = Column(String(200))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    run = relationship("AutopilotRun", back_populates="validations")
+
+    def __repr__(self) -> str:
+        status = "APPROVED" if self.is_approved else "REJECTED"
+        return f"<AutopilotValidation(symbol='{self.symbol}', {status})>"
