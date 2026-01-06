@@ -4,14 +4,21 @@ AI-Powered Indonesian Stock Analysis CLI - Your personal hedge fund toolkit for 
 
 Designed for **passive investors** with:
 - 15 minutes/day
-- Small capital (< Rp 5 juta)
+- Small capital (< Rp 10 juta)
 - Systematic, data-driven approach
 
 ## Features
 
+### Quality Over Quantity System (NEW)
+- **6-Gate Decision Filter** - Only trade when ALL quality gates pass
+- **Smart Money Score** - Track institutional accumulation via OBV, MFI, volume
+- **Support/Resistance Detection** - Automated pivot point analysis
+- **Trade Plan Generation** - Entry range, stop-loss, take-profit levels
+- **3-Agent AI Validation** - Technical, Fundamental, Risk Manager review
+
 ### Core Analysis
 - **Multi-Agent Trading System** - 7 specialized AI agents (Analyst, Researcher, Risk Manager, etc.)
-- **Technical Analysis** - RSI, MACD, Bollinger Bands, EMA crossovers
+- **Technical Analysis** - RSI, MACD, Bollinger Bands, EMA crossovers, ADX
 - **Sentiment Analysis** - Gemini-powered Indonesian news analysis
 
 ### Quantitative Tools (Hedge Fund Style)
@@ -33,87 +40,146 @@ Designed for **passive investors** with:
 ## Installation
 
 ```bash
-pip install stockai
-```
-
-Or from source:
-```bash
+# Using uv (recommended)
 git clone https://github.com/rebekz/stockai.git
 cd stockai
+uv sync
+
+# Or using pip
 pip install -e .
 ```
 
 ## Quick Start
 
-### Daily Routine (15 min)
-
 ```bash
-# Morning (before 9:00 WIB) - Check alerts
-python -m stockai morning
+# Verify installation
+uv run stockai --version
 
-# Evening (after 16:00 WIB) - Review day
-python -m stockai evening
+# Show all commands
+uv run stockai --help
 ```
 
-### Weekly Analysis
+---
+
+## Passive Trader Workflow (15 Minutes/Day)
+
+Perfect for busy professionals with small capital (Rp 5-10 juta) who want systematic, stress-free investing.
+
+### Daily Routine (5-10 min)
 
 ```bash
-# Performance review
-python -m stockai weekly
+# Morning Check (before 9:00 WIB) - 3 min
+uv run stockai morning
 
-# Find top opportunities
-python -m stockai score rank --top 5
-
-# Scan market with AI agents
-python -m stockai agents scan --top 10
+# Evening Review (after 16:00 WIB) - 5 min
+uv run stockai evening
 ```
 
-### Before Buying
+### Weekend Analysis (30 min once/week)
 
 ```bash
-# Calculate safe position size (2% risk rule)
-python -m stockai risk position --capital 5000000 --price 4500 --stop-pct 7
+# 1. Weekly performance review
+uv run stockai weekly
 
-# Analyze stock score
-python -m stockai score stock BBCA
+# 2. Find quality opportunities with 6-gate filter
+uv run stockai quality BBCA
+uv run stockai quality BBRI
+uv run stockai quality TLKM
 
+# 3. Run autopilot scan (finds candidates automatically)
+uv run stockai autopilot --dry-run --limit 20
+```
+
+### Before Buying (5 min per stock)
+
+```bash
+# Full quality analysis with trade plan
+uv run stockai quality BBCA --capital 5000000
+
+# Example output:
+# Gate Status: 5/6 PASSED (WATCH)
+# Smart Money: 3.2 (ACCUMULATION)
+# Entry Range: Rp 9,850 - Rp 10,050
+# Stop Loss: Rp 9,550 (-4.5%)
+# Take Profit 1: Rp 10,500 (+5%)
+# Risk/Reward: 1:1.5
+# Position Size: 1 lot (Rp 1,005,000)
+```
+
+### Monthly Rebalancing (15 min)
+
+```bash
 # Check portfolio diversification
-python -m stockai risk diversification
+uv run stockai risk diversification
+
+# Review portfolio risk metrics
+uv run stockai risk portfolio
+
+# Score your current holdings
+uv run stockai score stock BBCA
 ```
 
-### Paper Trading (Practice First!)
+### Sample Weekly Schedule
+
+| Day | Time | Task | Command |
+|-----|------|------|---------|
+| Mon-Fri | 08:45 | Morning check | `uv run stockai morning` |
+| Mon-Fri | 16:15 | Evening review | `uv run stockai evening` |
+| Saturday | 10:00 | Weekly analysis | `uv run stockai weekly` |
+| Saturday | 10:15 | Find opportunities | `uv run stockai autopilot --dry-run` |
+| Saturday | 10:30 | Quality check top picks | `uv run stockai quality SYMBOL` |
+
+---
+
+## Quality Analysis Command
+
+The `quality` command performs comprehensive analysis using the Quality Over Quantity system:
 
 ```bash
-# Start with virtual capital
-python -m stockai paper reset --capital 5000000
+# Basic analysis
+uv run stockai quality BBCA
 
-# Buy 1 lot
-python -m stockai paper buy BBCA 1
+# With custom capital for position sizing
+uv run stockai quality BBCA --capital 10000000
 
-# View portfolio
-python -m stockai paper view
+# With AI validation (requires API key)
+uv run stockai quality BBCA --ai
 
-# Sell
-python -m stockai paper sell BBCA 1
+# Verbose output
+uv run stockai quality BBCA --verbose
 ```
 
-### Learning
+### 6-Gate Decision Filter
 
-```bash
-# Start tutorial
-python -m stockai learn start
+Only trade when ALL gates pass:
 
-# Take quiz
-python -m stockai learn quiz
-```
+| Gate | Threshold | Purpose |
+|------|-----------|---------|
+| Overall Score | >= 70 | Composite quality check |
+| Technical Score | >= 60 | Entry timing validation |
+| Smart Money Score | >= 3.0 | Institutional accumulation |
+| Distance to Support | <= 5% | Risk management |
+| ADX Trend Strength | >= 20 | Trend confirmation |
+| Fundamental Score | >= 60 | Financial health |
+
+### Confidence Levels
+
+- **HIGH** (6/6 gates pass) - Execute trade
+- **WATCH** (4-5 gates pass, score >= 60) - Monitor for improvement
+- **REJECTED** (< 4 gates or score < 60) - Skip this opportunity
+
+---
 
 ## All Commands
 
 | Category | Command | Description |
 |----------|---------|-------------|
+| **Quality** | `quality SYMBOL` | Full 6-gate analysis with trade plan |
 | **Briefings** | `morning` | Morning briefing (pre-market) |
 | | `evening` | Evening briefing (post-market) |
 | | `weekly` | Weekly performance review |
+| **Autopilot** | `autopilot` | Automated daily trading system |
+| | `autopilot --dry-run` | Preview without trading |
 | **Scoring** | `score stock SYMBOL` | Multi-factor score analysis |
 | | `score rank` | Rank stocks by composite score |
 | **Risk** | `risk position` | Position size calculator (2% rule) |
@@ -122,7 +188,6 @@ python -m stockai learn quiz
 | **AI Agents** | `agents scan` | Scan market for opportunities |
 | | `agents recommend` | Portfolio recommendations |
 | | `agents daily` | Daily trading recommendations |
-| | `agents signal` | Quick trading signals |
 | **Analysis** | `analyze SYMBOL` | AI-powered stock analysis |
 | | `sentiment SYMBOL` | News sentiment analysis |
 | | `info SYMBOL` | Stock information |
@@ -139,26 +204,53 @@ python -m stockai learn quiz
 | **Other** | `list` | List stocks in index |
 | | `suggest` | Technical buy signals |
 | | `web` | Start web dashboard |
-| | `auto schedule` | Automated scanning |
+
+---
 
 ## Capital Allocation Guide
 
-For small capital (< Rp 5 juta), focus on 3-5 stocks:
+### Small Capital (Rp 5-10 juta)
+
+Focus on 3-5 high-quality stocks:
 
 ```
-Rp 5,000,000 total
-├── Stock 1: Rp 1,000,000 (20%)
-├── Stock 2: Rp 1,000,000 (20%)
-├── Stock 3: Rp 1,000,000 (20%)
-├── Stock 4: Rp 1,000,000 (20%)
-└── Cash Reserve: Rp 1,000,000 (20%)
+Rp 10,000,000 total
+├── Stock 1: Rp 2,000,000 (20%) - Blue chip
+├── Stock 2: Rp 2,000,000 (20%) - Blue chip
+├── Stock 3: Rp 2,000,000 (20%) - Growth
+├── Stock 4: Rp 2,000,000 (20%) - Dividend
+└── Cash Reserve: Rp 2,000,000 (20%) - For opportunities
 ```
 
-**Risk Management Rules:**
+### Risk Management Rules
+
 - Never risk more than 2% of capital per trade
 - Max 20% in any single stock
 - Max 40% in any sector
 - Always use stop-losses (typically 5-8% below entry)
+- Only buy when 6-gate filter passes
+
+---
+
+## Multi-Factor Scoring System
+
+The scoring system evaluates stocks using hedge fund methodology:
+
+| Factor | Weight | Metrics |
+|--------|--------|---------|
+| **Value** | 25% | P/E ratio, P/B ratio vs sector |
+| **Quality** | 30% | ROE, debt-to-equity, profit margins |
+| **Momentum** | 25% | 6-month returns, trend strength |
+| **Volatility** | 20% | Beta, standard deviation (lower = safer) |
+
+**Score Interpretation:**
+- 80-100: Excellent (Strong Buy)
+- 70-79: Good (Buy)
+- 60-69: Fair (Hold/Watch)
+- 50-59: Poor (Sell)
+- Below 50: Very Poor (Strong Sell)
+
+---
 
 ## Configuration
 
@@ -176,23 +268,7 @@ cp .env.example .env
 - `TELEGRAM_BOT_TOKEN` - For trading alerts
 - `TELEGRAM_CHAT_ID` - Your Telegram chat ID
 
-## Multi-Factor Scoring System
-
-The scoring system evaluates stocks using hedge fund methodology:
-
-| Factor | Weight | Metrics |
-|--------|--------|---------|
-| **Value** | 25% | P/E ratio, P/B ratio vs sector |
-| **Quality** | 30% | ROE, debt-to-equity, profit margins |
-| **Momentum** | 25% | 6-month returns, trend strength |
-| **Volatility** | 20% | Beta, standard deviation (lower = safer) |
-
-**Score Interpretation:**
-- 80-100: Excellent (Strong Buy)
-- 70-79: Good (Buy)
-- 60-69: Fair (Hold)
-- 50-59: Poor (Sell)
-- Below 50: Very Poor (Strong Sell)
+---
 
 ## Architecture
 
@@ -200,12 +276,16 @@ The scoring system evaluates stocks using hedge fund methodology:
 stockai/
 ├── agents/          # Multi-agent trading system
 │   ├── orchestrator.py
-│   ├── subagents.py
+│   ├── focused_validator.py  # 3-agent validation
+│   ├── focused_prompts.py
 │   └── tools.py
-├── scoring/         # Multi-factor scoring
-│   ├── factors.py
-│   ├── screener.py
-│   └── signals.py
+├── scoring/         # Multi-factor scoring & gates
+│   ├── analyzer.py      # Integrated analysis
+│   ├── factors.py       # Value/Quality/Momentum/Volatility
+│   ├── gates.py         # 6-gate decision filter
+│   ├── smart_money.py   # OBV/MFI/Volume analysis
+│   ├── support_resistance.py
+│   └── trade_plan.py    # Entry/SL/TP generation
 ├── risk/            # Risk management
 │   ├── position_sizing.py
 │   ├── diversification.py
@@ -213,17 +293,17 @@ stockai/
 ├── briefing/        # Daily/weekly briefings
 │   ├── daily.py
 │   └── weekly.py
+├── autopilot/       # Automated trading system
+│   └── engine.py
 ├── tutorial/        # Learning system
 │   ├── lessons.py
 │   ├── quiz.py
 │   └── paper_trading.py
-├── automation/      # Scheduled tasks
-│   ├── scheduler.py
-│   ├── runner.py
-│   └── notifier.py
 └── cli/             # Command-line interface
     └── main.py
 ```
+
+---
 
 ## Disclaimer
 

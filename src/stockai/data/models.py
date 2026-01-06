@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
@@ -362,6 +363,33 @@ class AutopilotValidation(Base):
     is_approved = Column(Boolean, nullable=False)
     rejection_reason = Column(String(200))
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Gate validation
+    gates_passed = Column(Integer)
+    total_gates = Column(Integer, default=6)
+    rejection_reasons_json = Column(JSON)  # List of strings
+
+    # Trade plan
+    entry_low = Column(Float)
+    entry_high = Column(Float)
+    stop_loss = Column(Float)
+    take_profit_1 = Column(Float)
+    take_profit_2 = Column(Float)
+    take_profit_3 = Column(Float)
+    risk_reward_ratio = Column(Float)
+
+    # Support/Resistance
+    nearest_support = Column(Float)
+    nearest_resistance = Column(Float)
+    distance_to_support_pct = Column(Float)
+
+    # Smart Money
+    smart_money_score = Column(Float)
+    smart_money_interpretation = Column(String(20))
+
+    # ADX
+    adx_value = Column(Float)
+    adx_trend_strength = Column(String(20))
 
     # Relationships
     run = relationship("AutopilotRun", back_populates="validations")

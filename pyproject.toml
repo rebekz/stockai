@@ -84,12 +84,12 @@ all = [
 ]
 
 [project.scripts]
-stock = "stockai.cli.main:app"
+stockai = "stockai.cli.main:app"
 
 [project.urls]
-Homepage = "https://github.com/fitra/stockai"
-Documentation = "https://github.com/fitra/stockai#readme"
-Repository = "https://github.com/fitra/stockai"
+Homepage = "https://github.com/rebekz/stockai"
+Documentation = "https://github.com/rebekz/stockai#readme"
+Repository = "https://github.com/rebekz/stockai"
 
 [build-system]
 requires = ["hatchling"]

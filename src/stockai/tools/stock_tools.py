@@ -8,6 +8,8 @@ import logging
 from datetime import datetime
 from typing import Any
 
+import pandas as pd
+
 from stockai.data.sources.yahoo import YahooFinanceSource
 from stockai.data.sources.idx import IDXIndexSource, get_idx30, get_lq45
 from stockai.tools.registry import stockai_tool, get_registry
@@ -214,6 +216,72 @@ def get_technical_indicators(symbol: str, period: str = "3mo") -> dict[str, Any]
     except Exception as e:
         logger.error(f"Technical analysis failed: {e}")
         return {"error": str(e)}
+
+
+def calculate_adx(df: "pd.DataFrame", period: int = 14) -> dict[str, Any]:
+    """Calculate ADX and directional indicators.
+
+    Args:
+        df: DataFrame with 'high', 'low', 'close' columns
+        period: ADX calculation period (default 14)
+
+    Returns:
+        Dictionary with ADX value, directional indicators, and trend analysis
+    """
+    import ta
+
+    try:
+        # Calculate ADX using ta library
+        adx_indicator = ta.trend.ADXIndicator(
+            df["high"], df["low"], df["close"], window=period
+        )
+
+        current_adx = adx_indicator.adx().iloc[-1]
+        plus_di = adx_indicator.adx_pos().iloc[-1]
+        minus_di = adx_indicator.adx_neg().iloc[-1]
+
+        # Handle NaN values
+        if pd.isna(current_adx):
+            current_adx = 0.0
+        if pd.isna(plus_di):
+            plus_di = 0.0
+        if pd.isna(minus_di):
+            minus_di = 0.0
+
+        # Determine trend direction
+        trend_direction = "BULLISH" if plus_di > minus_di else "BEARISH"
+
+        # Determine trend strength
+        if current_adx >= 50:
+            trend_strength = "VERY_STRONG"
+        elif current_adx >= 25:
+            trend_strength = "STRONG"
+        elif current_adx >= 20:
+            trend_strength = "MODERATE"
+        elif current_adx >= 15:
+            trend_strength = "WEAK"
+        else:
+            trend_strength = "ABSENT"
+
+        return {
+            "adx": round(float(current_adx), 1),
+            "plus_di": round(float(plus_di), 1),
+            "minus_di": round(float(minus_di), 1),
+            "trend_direction": trend_direction,
+            "trend_strength": trend_strength,
+            "is_tradeable": current_adx >= 20,
+        }
+    except Exception as e:
+        logger.error(f"ADX calculation failed: {e}")
+        return {
+            "adx": 0.0,
+            "plus_di": 0.0,
+            "minus_di": 0.0,
+            "trend_direction": "UNKNOWN",
+            "trend_strength": "ABSENT",
+            "is_tradeable": False,
+            "error": str(e),
+        }
 
 
 @stockai_tool(name="get_volume_analysis", category="analysis")

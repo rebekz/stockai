@@ -29,7 +29,10 @@ from stockai.data.sources.idx import IDXIndexSource
 from stockai.data.sources.yahoo import YahooFinanceSource
 from stockai.scoring.factors import score_stock, FactorScores
 from stockai.scoring.signals import SignalGenerator, Signal, SignalType
+from stockai.scoring.analyzer import analyze_stock, AnalysisResult
+from stockai.scoring.gates import GateConfig
 from stockai.risk.position_sizing import calculate_position_size, PositionSize
+from stockai.agents.focused_validator import FocusedValidator, FocusedValidationResult
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,7 @@ class AutopilotConfig:
     ai_sell_threshold: float = 5.0  # AI score <= 5.0 for SELL confirmation
     ai_concurrency: int = 3  # Parallel validation limit
     ai_verbose: bool = False  # Show detailed agent analysis
+    use_focused_validation: bool = True  # Use focused 3-agent validation (faster, cheaper)
 
     @property
     def is_monitor_mode(self) -> bool:
@@ -98,6 +102,13 @@ class TradeSignal:
     target: float | None
     reason: str
     factor_scores: FactorScores | None = None
+
+    # Gate validation fields
+    gates_passed: int | None = None  # Number of gates passed
+    gates_total: int = 6  # Total gates
+    gate_rejection_reasons: list[str] = field(default_factory=list)  # Rejection reasons
+    gate_confidence: str | None = None  # HIGH, WATCH, REJECTED
+    analysis_result: AnalysisResult | None = None  # Full analysis result
 
     # AI Validation fields
     ai_validated: bool = False  # Has been validated by AI
@@ -146,6 +157,10 @@ class AutopilotResult:
     # Signals (before AI validation)
     buy_signals: list[TradeSignal] = field(default_factory=list)
     sell_signals: list[TradeSignal] = field(default_factory=list)
+
+    # Gate Validation results
+    gate_qualified_buys: list[TradeSignal] = field(default_factory=list)
+    gate_rejected_buys: list[TradeSignal] = field(default_factory=list)
 
     # AI Validation results
     ai_enabled: bool = False
@@ -260,10 +275,24 @@ class AutopilotEngine:
         result.buy_signals = buy_signals
         result.sell_signals = sell_signals
 
-        # Phase 3: AI GATE (optional)
-        if self.config.ai_enabled and (buy_signals or sell_signals):
+        # Phase 2.5: GATE VALIDATION (filter buy signals through quality gates)
+        if buy_signals:
+            logger.info("Running gate validation...")
+            gate_qualified, gate_rejected = self._apply_gate_filter(buy_signals)
+            result.gate_qualified_buys = gate_qualified
+            result.gate_rejected_buys = gate_rejected
+
+            if gate_rejected:
+                logger.info(
+                    f"Gate filter: {len(gate_qualified)} qualified, {len(gate_rejected)} rejected"
+                )
+        else:
+            gate_qualified = []
+
+        # Phase 3: AI GATE (optional, only for gate-qualified signals)
+        if self.config.ai_enabled and (gate_qualified or sell_signals):
             logger.info("Running AI validation...")
-            approved_buys, rejected_buys = self._validate_signals_with_ai(buy_signals)
+            approved_buys, rejected_buys = self._validate_signals_with_ai(gate_qualified)
             approved_sells, rejected_sells = self._validate_signals_with_ai(sell_signals)
 
             result.ai_approved_buys = approved_buys
@@ -272,7 +301,7 @@ class AutopilotEngine:
             result.ai_rejected_sells = rejected_sells
 
             # Warn if all signals were rejected by AI
-            total_signals = len(buy_signals) + len(sell_signals)
+            total_signals = len(gate_qualified) + len(sell_signals)
             total_approved = len(approved_buys) + len(approved_sells)
             if total_signals > 0 and total_approved == 0:
                 logger.warning(
@@ -284,8 +313,8 @@ class AutopilotEngine:
             signals_to_size = approved_buys
             signals_to_sell = approved_sells
         else:
-            # AI disabled - all signals proceed
-            signals_to_size = buy_signals
+            # AI disabled - gate-qualified signals proceed
+            signals_to_size = gate_qualified
             signals_to_sell = sell_signals
 
         # Phase 4: POSITION SIZING (for approved buys only)
@@ -465,10 +494,88 @@ class AutopilotEngine:
 
         return recommendations
 
+    def _apply_gate_filter(
+        self, buy_signals: list[TradeSignal]
+    ) -> tuple[list[TradeSignal], list[TradeSignal]]:
+        """Apply gate validation filter to buy signals.
+
+        Args:
+            buy_signals: List of buy signals to filter
+
+        Returns:
+            Tuple of (qualified_signals, rejected_signals)
+        """
+        if not buy_signals:
+            return [], []
+
+        qualified = []
+        rejected = []
+        gate_config = GateConfig()
+
+        for signal in buy_signals:
+            try:
+                # Fetch price history for analysis
+                df = self.yahoo_source.get_price_history(signal.symbol, period="3mo")
+                if df is None or df.empty or len(df) < 20:
+                    signal.gate_rejection_reasons = ["Insufficient price history"]
+                    signal.gate_confidence = "REJECTED"
+                    signal.gates_passed = 0
+                    rejected.append(signal)
+                    logger.info(f"{signal.symbol}: Gate REJECTED - Insufficient data")
+                    continue
+
+                # Run full analysis
+                analysis = analyze_stock(
+                    ticker=signal.symbol,
+                    df=df,
+                    fundamentals=None,  # Could fetch fundamentals here
+                    config=gate_config,
+                )
+
+                # Update signal with gate results
+                signal.gates_passed = analysis.gates.gates_passed
+                signal.gate_rejection_reasons = analysis.gates.rejection_reasons
+                signal.gate_confidence = analysis.confidence
+                signal.analysis_result = analysis
+
+                # Update stop_loss and target from trade plan if available
+                if analysis.trade_plan:
+                    signal.stop_loss = analysis.trade_plan.stop_loss
+                    signal.target = analysis.trade_plan.take_profit_1
+
+                if analysis.gates.all_passed:
+                    qualified.append(signal)
+                    logger.info(
+                        f"{signal.symbol}: Gate PASSED {analysis.gates.gates_passed}/{analysis.gates.total_gates} "
+                        f"(Smart Money: {analysis.smart_money.score:.1f}, ADX: {analysis.adx.get('adx', 0):.1f})"
+                    )
+                elif analysis.confidence == "WATCH":
+                    # Include WATCH signals but flag them
+                    qualified.append(signal)
+                    logger.info(
+                        f"{signal.symbol}: Gate WATCH {analysis.gates.gates_passed}/{analysis.gates.total_gates} - "
+                        f"{', '.join(analysis.gates.rejection_reasons[:2])}"
+                    )
+                else:
+                    rejected.append(signal)
+                    logger.info(
+                        f"{signal.symbol}: Gate REJECTED {analysis.gates.gates_passed}/{analysis.gates.total_gates} - "
+                        f"{', '.join(analysis.gates.rejection_reasons[:2])}"
+                    )
+
+            except Exception as e:
+                logger.error(f"Gate filter error for {signal.symbol}: {e}")
+                signal.gate_rejection_reasons = [f"Analysis error: {str(e)}"]
+                signal.gate_confidence = "REJECTED"
+                signal.gates_passed = 0
+                rejected.append(signal)
+
+        return qualified, rejected
+
     def _validate_signals_with_ai(
         self, signals: list[TradeSignal]
     ) -> tuple[list[TradeSignal], list[TradeSignal]]:
-        """Validate signals with AI orchestrator.
+        """Validate signals with AI orchestrator or focused validator.
 
         Args:
             signals: List of trade signals to validate
@@ -479,6 +586,106 @@ class AutopilotEngine:
         if not signals:
             return [], []
 
+        # Use focused 3-agent validation if enabled and signals have analysis results
+        if self.config.use_focused_validation:
+            return self._validate_with_focused_agents(signals)
+
+        # Fall back to original 7-agent orchestrator
+        return self._validate_with_orchestrator(signals)
+
+    def _validate_with_focused_agents(
+        self, signals: list[TradeSignal]
+    ) -> tuple[list[TradeSignal], list[TradeSignal]]:
+        """Validate signals using the focused 3-agent pipeline.
+
+        This is faster and cheaper than the full 7-agent orchestrator.
+        """
+        approved = []
+        rejected = []
+
+        # Get event loop
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        validator = FocusedValidator(timeout=30.0)
+
+        for signal in signals:
+            if not signal.analysis_result:
+                # No analysis available, skip validation
+                logger.warning(f"{signal.symbol}: No analysis result, skipping AI validation")
+                signal.ai_validated = False
+                rejected.append(signal)
+                continue
+
+            # Get fundamentals for the stock (if available from cache)
+            fundamentals = {}
+            try:
+                info = self.yahoo_source.get_stock_info(signal.symbol)
+                if info:
+                    fundamentals = {
+                        "pe_ratio": info.get("pe_ratio"),
+                        "pb_ratio": info.get("pb_ratio"),
+                        "roe": info.get("roe"),
+                        "debt_to_equity": info.get("debt_to_equity"),
+                        "profit_margin": info.get("profit_margin"),
+                        "sector": info.get("sector"),
+                    }
+            except Exception:
+                pass  # Use empty fundamentals
+
+            # Run focused validation
+            try:
+                result: FocusedValidationResult = loop.run_until_complete(
+                    validator.validate(
+                        signal.analysis_result,
+                        fundamentals=fundamentals,
+                        capital=self.config.capital or 10_000_000,
+                    )
+                )
+
+                signal.ai_validated = True
+                signal.ai_approved = result.approved
+
+                if result.approved:
+                    # Build approval reasons
+                    signal.ai_key_reasons = result.approval_reasons
+                    signal.ai_recommendation = "APPROVE - Passed all 3 focused agents"
+                    signal.ai_score = 8.0  # Default high score for focused approval
+                    approved.append(signal)
+                    logger.info(
+                        f"{signal.action} {signal.symbol}: ✓ APPROVED by focused validator"
+                    )
+                else:
+                    signal.ai_rejection_reason = f"Rejected by {result.rejected_by}: {result.rejection_reason}"
+                    signal.ai_recommendation = f"REJECT - {result.rejected_by}"
+                    signal.ai_score = 4.0  # Default low score for rejection
+                    rejected.append(signal)
+                    logger.info(
+                        f"{signal.action} {signal.symbol}: ✗ REJECTED by {result.rejected_by} "
+                        f"({result.rejection_reason})"
+                    )
+
+            except asyncio.TimeoutError:
+                logger.warning(f"{signal.symbol}: AI validation timed out, defaulting to approve")
+                signal.ai_validated = True
+                signal.ai_approved = True
+                signal.ai_recommendation = "APPROVE - Timeout, defaulted"
+                approved.append(signal)
+            except Exception as e:
+                logger.error(f"{signal.symbol}: AI validation error: {e}")
+                signal.ai_validated = False
+                signal.ai_rejection_reason = f"Validation error: {e}"
+                rejected.append(signal)
+
+        return approved, rejected
+
+    def _validate_with_orchestrator(
+        self, signals: list[TradeSignal]
+    ) -> tuple[list[TradeSignal], list[TradeSignal]]:
+        """Validate signals using the full 7-agent orchestrator."""
         # Prepare batch for validation
         validation_requests = [
             (s.symbol, s.action, s.score) for s in signals
@@ -602,6 +809,9 @@ class AutopilotEngine:
                     result.ai_rejected_sells
                 )
                 for signal in all_validated_signals:
+                    # Build validation record with gate data if available
+                    analysis = signal.analysis_result
+
                     validation_record = AutopilotValidation(
                         run_id=run.id,
                         symbol=signal.symbol,
@@ -611,6 +821,28 @@ class AutopilotEngine:
                         ai_recommendation=signal.ai_recommendation,
                         is_approved=signal.ai_approved if signal.ai_approved is not None else False,
                         rejection_reason=signal.ai_rejection_reason,
+                        # Gate validation fields
+                        gates_passed=signal.gates_passed,
+                        total_gates=signal.gates_total,
+                        rejection_reasons_json=signal.gate_rejection_reasons if signal.gate_rejection_reasons else None,
+                        # Trade plan fields (from analysis_result)
+                        entry_low=analysis.trade_plan.entry_low if analysis and analysis.trade_plan else None,
+                        entry_high=analysis.trade_plan.entry_high if analysis and analysis.trade_plan else None,
+                        stop_loss=analysis.trade_plan.stop_loss if analysis and analysis.trade_plan else signal.stop_loss,
+                        take_profit_1=analysis.trade_plan.take_profit_1 if analysis and analysis.trade_plan else None,
+                        take_profit_2=analysis.trade_plan.take_profit_2 if analysis and analysis.trade_plan else None,
+                        take_profit_3=analysis.trade_plan.take_profit_3 if analysis and analysis.trade_plan else None,
+                        risk_reward_ratio=analysis.trade_plan.risk_reward_ratio if analysis and analysis.trade_plan else None,
+                        # Support/Resistance fields
+                        nearest_support=analysis.support_resistance.nearest_support if analysis else None,
+                        nearest_resistance=analysis.support_resistance.nearest_resistance if analysis else None,
+                        distance_to_support_pct=analysis.support_resistance.distance_to_support_pct if analysis else None,
+                        # Smart Money fields
+                        smart_money_score=analysis.smart_money.score if analysis else None,
+                        smart_money_interpretation=analysis.smart_money.interpretation if analysis else None,
+                        # ADX fields
+                        adx_value=analysis.adx.get("adx") if analysis and analysis.adx else None,
+                        adx_trend_strength=analysis.adx.get("trend_strength") if analysis and analysis.adx else None,
                     )
                     session.add(validation_record)
 

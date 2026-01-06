@@ -397,6 +397,253 @@ def analyze(
 
 
 @app.command()
+def quality(
+    symbol: str = typer.Argument(..., help="Stock symbol to analyze"),
+    capital: float = typer.Option(10_000_000, "--capital", "-c", help="Capital for position sizing (IDR)"),
+    ai: bool = typer.Option(False, "--ai", help="Run AI validation after gate filtering"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed analysis"),
+) -> None:
+    """Full stock analysis with gate filter and trade plan.
+
+    Performs comprehensive analysis using the Quality Over Quantity system:
+    - Smart Money Score (OBV, MFI, volume analysis)
+    - Support/Resistance detection
+    - ADX trend strength
+    - 6-Gate decision filter
+    - Trade plan with entry/SL/TP levels
+    - Optional AI validation
+
+    Examples:
+        stockai quality BBCA
+        stockai quality TLKM --capital 50000000
+        stockai quality BBRI --ai --verbose
+    """
+    import asyncio
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich import box
+
+    from stockai.data.sources.yahoo import YahooFinanceSource
+    from stockai.scoring.analyzer import analyze_stock
+    from stockai.scoring.gates import GateConfig
+    from stockai.scoring.trade_plan import calculate_position_with_plan
+    from stockai.agents.focused_validator import FocusedValidator
+
+    symbol = symbol.upper()
+
+    console.print(f"\n[bold blue]📊 Quality Analysis: {symbol}[/bold blue]\n")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Fetching price history...", total=None)
+
+            # Fetch data
+            yahoo = YahooFinanceSource()
+            history = yahoo.get_price_history(symbol, period="3mo")
+
+            if history is None or history.empty:
+                console.print(f"[red]Error:[/red] No price data found for {symbol}")
+                raise typer.Exit(1)
+
+            progress.update(task, description="Fetching fundamentals...")
+            info = yahoo.get_stock_info(symbol)
+
+            fundamentals = {}
+            if info:
+                fundamentals = {
+                    "pe_ratio": info.get("pe_ratio"),
+                    "pb_ratio": info.get("pb_ratio"),
+                    "roe": info.get("roe"),
+                    "debt_to_equity": info.get("debt_to_equity"),
+                    "profit_margin": info.get("profit_margin"),
+                    "current_ratio": info.get("current_ratio"),
+                    "sector": info.get("sector"),
+                }
+
+            progress.update(task, description="Running gate analysis...")
+
+            # Run analysis
+            result = analyze_stock(
+                ticker=symbol,
+                df=history,
+                fundamentals=fundamentals,
+                config=GateConfig(),
+            )
+
+        # Display results
+        # 1. Scores Table
+        scores_table = Table(title="📈 Factor Scores", box=box.ROUNDED, show_header=True)
+        scores_table.add_column("Factor", style="cyan")
+        scores_table.add_column("Score", justify="right")
+        scores_table.add_column("Rating", justify="center")
+
+        def score_rating(score: float) -> str:
+            if score >= 80:
+                return "[green]Excellent[/green]"
+            elif score >= 70:
+                return "[blue]Good[/blue]"
+            elif score >= 60:
+                return "[yellow]Fair[/yellow]"
+            else:
+                return "[red]Poor[/red]"
+
+        scores_table.add_row("Composite", f"{result.composite_score:.1f}", score_rating(result.composite_score))
+        scores_table.add_row("Value", f"{result.value_score:.1f}", score_rating(result.value_score))
+        scores_table.add_row("Quality", f"{result.quality_score:.1f}", score_rating(result.quality_score))
+        scores_table.add_row("Momentum", f"{result.momentum_score:.1f}", score_rating(result.momentum_score))
+        scores_table.add_row("Volatility", f"{result.volatility_score:.1f}", "[green]Low[/green]" if result.volatility_score < 50 else "[yellow]High[/yellow]")
+        scores_table.add_row("Smart Money", f"{result.smart_money.score:.1f}", f"[cyan]{result.smart_money.interpretation}[/cyan]")
+
+        console.print(scores_table)
+        console.print()
+
+        # 2. Gate Validation
+        gates = result.gates
+        gate_status = "[green]✓ PASSED[/green]" if gates.all_passed else (
+            "[yellow]⚠ WATCH[/yellow]" if gates.confidence == "WATCH" else "[red]✗ REJECTED[/red]"
+        )
+
+        gate_lines = [
+            f"Status: {gate_status} ({gates.gates_passed}/{gates.total_gates} gates)",
+            "",
+            "[bold]Gates Passed:[/bold]",
+        ]
+        for g in gates.passed_gates:
+            gate_lines.append(f"  [green]✓[/green] {g}")
+
+        if gates.rejection_reasons:
+            gate_lines.append("")
+            gate_lines.append("[bold]Rejection Reasons:[/bold]")
+            for r in gates.rejection_reasons:
+                gate_lines.append(f"  [red]✗[/red] {r}")
+
+        console.print(Panel("\n".join(gate_lines), title="🚦 Gate Validation", border_style="blue"))
+
+        # 3. Support/Resistance
+        sr = result.support_resistance
+        sr_lines = [
+            f"Current Price: [bold]Rp {result.current_price:,.0f}[/bold]",
+            f"Nearest Support: [green]Rp {sr.nearest_support:,.0f}[/green]" if sr.nearest_support else "Nearest Support: N/A",
+            f"Nearest Resistance: [red]Rp {sr.nearest_resistance:,.0f}[/red]" if sr.nearest_resistance else "Nearest Resistance: N/A",
+            f"Distance to Support: [cyan]{sr.distance_to_support_pct:.1f}%[/cyan]" if sr.distance_to_support_pct else "",
+            f"Near Support: {'[green]Yes[/green]' if sr.is_near_support else '[yellow]No[/yellow]'}",
+        ]
+        console.print(Panel("\n".join([l for l in sr_lines if l]), title="📍 Support/Resistance", border_style="cyan"))
+
+        # 4. ADX Trend
+        adx = result.adx
+        adx_lines = [
+            f"ADX: [bold]{adx.get('adx', 0):.1f}[/bold] ({adx.get('trend_strength', 'UNKNOWN')})",
+            f"Direction: {adx.get('trend_direction', 'UNKNOWN')}",
+            f"Tradeable: {'[green]Yes[/green]' if adx.get('is_tradeable') else '[yellow]No[/yellow]'}",
+        ]
+        console.print(Panel("\n".join(adx_lines), title="📊 ADX Trend", border_style="magenta"))
+
+        # 5. Trade Plan (if available)
+        if result.trade_plan:
+            plan = result.trade_plan
+            position = calculate_position_with_plan(capital, plan)
+
+            entry_mid = (plan.entry_low + plan.entry_high) / 2
+            sl_pct = ((entry_mid - plan.stop_loss) / entry_mid) * 100
+            tp1_pct = ((plan.take_profit_1 - entry_mid) / entry_mid) * 100
+            tp2_pct = ((plan.take_profit_2 - entry_mid) / entry_mid) * 100
+            tp3_pct = ((plan.take_profit_3 - entry_mid) / entry_mid) * 100
+
+            plan_lines = [
+                f"Entry Range: [green]Rp {plan.entry_low:,.0f} - Rp {plan.entry_high:,.0f}[/green]",
+                f"Stop Loss: [red]Rp {plan.stop_loss:,.0f}[/red] (-{sl_pct:.1f}%)",
+                f"Take Profit 1: [blue]Rp {plan.take_profit_1:,.0f}[/blue] (+{tp1_pct:.1f}%)",
+                f"Take Profit 2: [cyan]Rp {plan.take_profit_2:,.0f}[/cyan] (+{tp2_pct:.1f}%)",
+                f"Take Profit 3: [magenta]Rp {plan.take_profit_3:,.0f}[/magenta] (+{tp3_pct:.1f}%)",
+                f"Risk/Reward: [bold]{plan.risk_reward_ratio:.2f}:1[/bold]",
+                "",
+                f"[dim]Position Size (2% risk on Rp {capital:,.0f}):[/dim]",
+                f"  Lots: [bold]{position.get('lots', 0)}[/bold] ({position.get('shares', 0)} shares)",
+                f"  Value: Rp {position.get('position_value', 0):,.0f}",
+                f"  Max Loss: Rp {position.get('max_loss', 0):,.0f}",
+            ]
+            console.print(Panel("\n".join(plan_lines), title="📋 Trade Plan", border_style="green"))
+
+        # 6. Decision
+        decision_color = "green" if result.decision == "BUY" else "red"
+        confidence_color = {"HIGH": "green", "WATCH": "yellow", "REJECTED": "red"}.get(result.confidence, "white")
+
+        console.print(f"\n[bold]Decision:[/bold] [{decision_color}]{result.decision}[/{decision_color}]")
+        console.print(f"[bold]Confidence:[/bold] [{confidence_color}]{result.confidence}[/{confidence_color}]")
+
+        # 7. AI Validation (if requested)
+        if ai and result.gates.confidence in ["HIGH", "WATCH"]:
+            console.print()
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                transient=True,
+            ) as progress:
+                task = progress.add_task("Running AI validation...", total=None)
+
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                validator = FocusedValidator(timeout=30.0)
+                ai_result = loop.run_until_complete(
+                    validator.validate(result, fundamentals=fundamentals, capital=capital)
+                )
+
+            if ai_result.approved:
+                ai_lines = [
+                    "[green]✓ AI APPROVED[/green]",
+                    "",
+                    "[bold]Agent Decisions:[/bold]",
+                ]
+                if ai_result.technical_decision:
+                    ai_lines.append(f"  Technical: [green]APPROVE[/green] - {ai_result.technical_decision.reason}")
+                if ai_result.fundamental_decision:
+                    ai_lines.append(f"  Fundamental: [green]APPROVE[/green] - {ai_result.fundamental_decision.reason}")
+                if ai_result.risk_decision:
+                    ai_lines.append(f"  Risk: [green]APPROVE[/green] - {ai_result.risk_decision.reason}")
+            else:
+                ai_lines = [
+                    f"[red]✗ AI REJECTED[/red] by {ai_result.rejected_by}",
+                    "",
+                    f"Reason: {ai_result.rejection_reason}",
+                ]
+
+            console.print(Panel("\n".join(ai_lines), title="🤖 AI Validation", border_style="yellow"))
+
+        # Verbose output
+        if verbose:
+            console.print()
+            console.print("[dim]Smart Money Details:[/dim]")
+            sm = result.smart_money
+            console.print(f"  [dim]Accumulation Days: {sm.accumulation_days}[/dim]")
+            console.print(f"  [dim]Distribution Days: {sm.distribution_days}[/dim]")
+            console.print(f"  [dim]Net Accumulation: {sm.net_accumulation}[/dim]")
+            console.print(f"  [dim]OBV Trend: {sm.obv_trend}[/dim]")
+            console.print(f"  [dim]MFI: {sm.mfi:.1f} ({sm.mfi_signal})[/dim]")
+            console.print(f"  [dim]Volume: {sm.unusual_volume}[/dim]")
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        if verbose:
+            import traceback
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def predict(
     symbol: str = typer.Argument(..., help="Stock symbol to predict"),
     horizon: int = typer.Option(3, "--horizon", "-h", help="Prediction horizon in days (1, 3, 7)"),
