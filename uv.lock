@@ -2990,8 +2990,13 @@ dependencies = [
     { name = "duckdb" },
     { name = "fastapi" },
     { name = "feedparser" },
+    { name = "google-generativeai" },
     { name = "httpx" },
     { name = "jinja2" },
+    { name = "langchain" },
+    { name = "langchain-community" },
+    { name = "langchain-google-genai" },
+    { name = "langgraph" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pydantic" },
@@ -3009,19 +3014,7 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-ai = [
-    { name = "google-generativeai" },
-    { name = "langchain" },
-    { name = "langchain-community" },
-    { name = "langchain-google-genai" },
-    { name = "langgraph" },
-]
 all = [
-    { name = "google-generativeai" },
-    { name = "langchain" },
-    { name = "langchain-community" },
-    { name = "langchain-google-genai" },
-    { name = "langgraph" },
     { name = "mypy" },
     { name = "plotly" },
     { name = "pytest" },
@@ -3056,13 +3049,13 @@ requires-dist = [
     { name = "duckdb", specifier = ">=0.9.0" },
     { name = "fastapi", specifier = ">=0.109.0" },
     { name = "feedparser", specifier = ">=6.0.0" },
-    { name = "google-generativeai", marker = "extra == 'ai'", specifier = ">=0.8.0" },
+    { name = "google-generativeai", specifier = ">=0.8.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "jinja2", specifier = ">=3.1.0" },
-    { name = "langchain", marker = "extra == 'ai'", specifier = ">=0.3.0" },
-    { name = "langchain-community", marker = "extra == 'ai'", specifier = ">=0.3.0" },
-    { name = "langchain-google-genai", marker = "extra == 'ai'", specifier = ">=2.0.0" },
-    { name = "langgraph", marker = "extra == 'ai'", specifier = ">=0.2.0" },
+    { name = "langchain", specifier = ">=0.3.0" },
+    { name = "langchain-community", specifier = ">=0.3.0" },
+    { name = "langchain-google-genai", specifier = ">=2.0.0" },
+    { name = "langgraph", specifier = ">=0.2.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pandas", specifier = ">=2.0.0" },
@@ -3079,7 +3072,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "scikit-learn", marker = "extra == 'ml'", specifier = ">=1.3.0" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
-    { name = "stockai", extras = ["ml", "ai", "web", "dev"], marker = "extra == 'all'" },
+    { name = "stockai", extras = ["ml", "web", "dev"], marker = "extra == 'all'" },
     { name = "ta", specifier = ">=0.11.0" },
     { name = "tomli", specifier = ">=2.0.0" },
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.1.0" },
@@ -3089,7 +3082,7 @@ requires-dist = [
     { name = "xgboost", marker = "extra == 'ml'", specifier = ">=2.0.0" },
     { name = "yfinance", specifier = ">=0.2.36" },
 ]
-provides-extras = ["ml", "ai", "web", "dev", "all"]
+provides-extras = ["ml", "web", "dev", "all"]
 
 [[package]]
 name = "sympy"
