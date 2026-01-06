@@ -65,6 +65,89 @@ LQ45_ADDITIONAL = [
     {"symbol": "PTBA", "name": "Bukit Asam", "sector": "Energy"},
 ]
 
+# JII70 stocks (Jakarta Islamic Index 70 - 70 most liquid sharia-compliant stocks)
+# Note: JII70 excludes conventional banks and non-halal businesses
+JII70_STOCKS = [
+    # Top tier by market cap
+    {"symbol": "AMMN", "name": "Amman Mineral Internasional", "sector": "Basic Materials"},
+    {"symbol": "TLKM", "name": "Telkom Indonesia", "sector": "Infrastructures"},
+    {"symbol": "BYAN", "name": "Bayan Resources", "sector": "Energy"},
+    {"symbol": "TPIA", "name": "Chandra Asri Pacific", "sector": "Basic Materials"},
+    {"symbol": "ASII", "name": "Astra International", "sector": "Consumer Cyclicals"},
+    {"symbol": "GOTO", "name": "GoTo Gojek Tokopedia", "sector": "Technology"},
+    {"symbol": "DSSA", "name": "Dian Swastatika Sentosa", "sector": "Energy"},
+    {"symbol": "UNTR", "name": "United Tractors", "sector": "Industrials"},
+    {"symbol": "INDF", "name": "Indofood Sukses Makmur", "sector": "Consumer Non-Cyclicals"},
+    {"symbol": "PANI", "name": "Pantai Indah Kapuk Dua", "sector": "Property & Real Estate"},
+    # High market cap sharia stocks
+    {"symbol": "BRPT", "name": "Barito Pacific", "sector": "Basic Materials"},
+    {"symbol": "BRMS", "name": "Bumi Resources Minerals", "sector": "Basic Materials"},
+    {"symbol": "BUMI", "name": "Bumi Resources", "sector": "Energy"},
+    {"symbol": "UNVR", "name": "Unilever Indonesia", "sector": "Consumer Non-Cyclicals"},
+    {"symbol": "BRIS", "name": "Bank Syariah Indonesia", "sector": "Finance"},
+    {"symbol": "ICBP", "name": "Indofood CBP Sukses Makmur", "sector": "Consumer Non-Cyclicals"},
+    {"symbol": "ANTM", "name": "Aneka Tambang", "sector": "Basic Materials"},
+    {"symbol": "ISAT", "name": "Indosat Ooredoo Hutchison", "sector": "Infrastructures"},
+    {"symbol": "CPIN", "name": "Charoen Pokphand Indonesia", "sector": "Consumer Non-Cyclicals"},
+    {"symbol": "ADRO", "name": "Adaro Energy Indonesia", "sector": "Energy"},
+    # Mid-large cap sharia stocks
+    {"symbol": "INCO", "name": "Vale Indonesia", "sector": "Basic Materials"},
+    {"symbol": "MDKA", "name": "Merdeka Copper Gold", "sector": "Basic Materials"},
+    {"symbol": "KLBF", "name": "Kalbe Farma", "sector": "Consumer Non-Cyclicals"},
+    {"symbol": "PTBA", "name": "Bukit Asam", "sector": "Energy"},
+    {"symbol": "SMGR", "name": "Semen Indonesia", "sector": "Basic Materials"},
+    {"symbol": "INTP", "name": "Indocement Tunggal Prakarsa", "sector": "Basic Materials"},
+    {"symbol": "MYOR", "name": "Mayora Indah", "sector": "Consumer Non-Cyclicals"},
+    {"symbol": "JPFA", "name": "Japfa Comfeed Indonesia", "sector": "Consumer Non-Cyclicals"},
+    {"symbol": "EXCL", "name": "XL Axiata", "sector": "Infrastructures"},
+    {"symbol": "JSMR", "name": "Jasa Marga", "sector": "Infrastructures"},
+    # Infrastructure & Property sharia stocks
+    {"symbol": "TBIG", "name": "Tower Bersama Infrastructure", "sector": "Infrastructures"},
+    {"symbol": "TOWR", "name": "Sarana Menara Nusantara", "sector": "Infrastructures"},
+    {"symbol": "WIKA", "name": "Wijaya Karya", "sector": "Infrastructures"},
+    {"symbol": "WSKT", "name": "Waskita Karya", "sector": "Infrastructures"},
+    {"symbol": "CTRA", "name": "Ciputra Development", "sector": "Property & Real Estate"},
+    {"symbol": "SMRA", "name": "Summarecon Agung", "sector": "Property & Real Estate"},
+    {"symbol": "BSDE", "name": "Bumi Serpong Damai", "sector": "Property & Real Estate"},
+    {"symbol": "PWON", "name": "Pakuwon Jati", "sector": "Property & Real Estate"},
+    # Consumer & Healthcare sharia stocks
+    {"symbol": "SIDO", "name": "Industri Jamu dan Farmasi Sido Muncul", "sector": "Consumer Non-Cyclicals"},
+    {"symbol": "MIKA", "name": "Mitra Keluarga Karyasehat", "sector": "Healthcare"},
+    {"symbol": "ERAA", "name": "Erajaya Swasembada", "sector": "Consumer Cyclicals"},
+    {"symbol": "MAPI", "name": "Mitra Adiperkasa", "sector": "Consumer Cyclicals"},
+    {"symbol": "ACES", "name": "Ace Hardware Indonesia", "sector": "Consumer Cyclicals"},
+    {"symbol": "AMRT", "name": "Sumber Alfaria Trijaya", "sector": "Consumer Cyclicals"},
+    # Energy & Mining sharia stocks
+    {"symbol": "MEDC", "name": "Medco Energi Internasional", "sector": "Energy"},
+    {"symbol": "HRUM", "name": "Harum Energy", "sector": "Energy"},
+    {"symbol": "ITMG", "name": "Indo Tambangraya Megah", "sector": "Energy"},
+    {"symbol": "AKRA", "name": "AKR Corporindo", "sector": "Energy"},
+    {"symbol": "ESSA", "name": "Surya Esa Perkasa", "sector": "Energy"},
+    {"symbol": "PGAS", "name": "Perusahaan Gas Negara", "sector": "Energy"},
+    {"symbol": "TINS", "name": "Timah", "sector": "Basic Materials"},
+    # Technology & Media sharia stocks
+    {"symbol": "EMTK", "name": "Elang Mahkota Teknologi", "sector": "Technology"},
+    {"symbol": "BUKA", "name": "Bukalapak.com", "sector": "Technology"},
+    {"symbol": "MNCN", "name": "Media Nusantara Citra", "sector": "Consumer Cyclicals"},
+    {"symbol": "SCMA", "name": "Surya Citra Media", "sector": "Consumer Cyclicals"},
+    # Paper & Materials sharia stocks
+    {"symbol": "INKP", "name": "Indah Kiat Pulp & Paper", "sector": "Basic Materials"},
+    {"symbol": "TKIM", "name": "Pabrik Kertas Tjiwi Kimia", "sector": "Basic Materials"},
+    # Additional liquid sharia stocks
+    {"symbol": "BTPS", "name": "Bank BTPN Syariah", "sector": "Finance"},
+    {"symbol": "SRTG", "name": "Saratoga Investama Sedaya", "sector": "Finance"},
+    {"symbol": "MLPT", "name": "Multipolar Technology", "sector": "Technology"},
+    {"symbol": "KPIG", "name": "MNC Land", "sector": "Property & Real Estate"},
+    {"symbol": "BMTR", "name": "Global Mediacom", "sector": "Consumer Cyclicals"},
+    {"symbol": "LSIP", "name": "PP London Sumatra Indonesia", "sector": "Consumer Non-Cyclicals"},
+    {"symbol": "AALI", "name": "Astra Agro Lestari", "sector": "Consumer Non-Cyclicals"},
+    {"symbol": "SSMS", "name": "Sawit Sumbermas Sarana", "sector": "Consumer Non-Cyclicals"},
+    {"symbol": "SILO", "name": "Siloam International Hospitals", "sector": "Healthcare"},
+    {"symbol": "AUTO", "name": "Astra Otoparts", "sector": "Consumer Cyclicals"},
+    {"symbol": "SMDR", "name": "Samudera Indonesia", "sector": "Transportation & Logistics"},
+    {"symbol": "INKA", "name": "Industri Kereta Api", "sector": "Industrials"},
+]
+
 # Other notable IDX stocks
 OTHER_IDX_STOCKS = [
     {"symbol": "AALI", "name": "Astra Agro Lestari", "sector": "Consumer Non-Cyclicals"},
@@ -161,6 +244,10 @@ class IDXStockDatabase:
     def get_lq45_stocks(self) -> list[dict[str, Any]]:
         """Get all LQ45 stocks."""
         return (IDX30_STOCKS + LQ45_ADDITIONAL).copy()
+
+    def get_jii70_stocks(self) -> list[dict[str, Any]]:
+        """Get all JII70 stocks (Jakarta Islamic Index 70)."""
+        return JII70_STOCKS.copy()
 
     def get_all_stocks(self) -> list[dict[str, Any]]:
         """Get all known IDX stocks."""
@@ -277,3 +364,8 @@ def get_idx30_list() -> list[str]:
 def get_lq45_list() -> list[str]:
     """Get list of LQ45 symbols."""
     return [s["symbol"] for s in IDX30_STOCKS + LQ45_ADDITIONAL]
+
+
+def get_jii70_list() -> list[str]:
+    """Get list of JII70 symbols (Jakarta Islamic Index 70)."""
+    return [s["symbol"] for s in JII70_STOCKS]

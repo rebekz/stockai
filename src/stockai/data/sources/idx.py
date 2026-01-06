@@ -38,6 +38,37 @@ LQ45_SYMBOLS = [
     "SMGR", "TBIG", "TKIM", "TLKM", "UNVR",
 ]
 
+# JII70 components (Jakarta Islamic Index 70 - 70 most liquid sharia-compliant stocks)
+# Note: Excludes conventional banks and non-halal businesses
+JII70_SYMBOLS = [
+    # Top tier by market cap
+    "AMMN", "TLKM", "BYAN", "TPIA", "ASII",
+    "GOTO", "DSSA", "UNTR", "INDF", "PANI",
+    # High market cap sharia stocks
+    "BRPT", "BRMS", "BUMI", "UNVR", "BRIS",
+    "ICBP", "ANTM", "ISAT", "CPIN", "ADRO",
+    # Mid-large cap sharia stocks
+    "INCO", "MDKA", "KLBF", "PTBA", "SMGR",
+    "INTP", "MYOR", "JPFA", "EXCL", "JSMR",
+    # Infrastructure & Property sharia stocks
+    "TBIG", "TOWR", "WIKA", "WSKT", "CTRA",
+    "SMRA", "BSDE", "PWON",
+    # Consumer & Healthcare sharia stocks
+    "SIDO", "MIKA", "ERAA", "MAPI", "ACES",
+    "AMRT",
+    # Energy & Mining sharia stocks
+    "MEDC", "HRUM", "ITMG", "AKRA", "ESSA",
+    "PGAS", "TINS",
+    # Technology & Media sharia stocks
+    "EMTK", "BUKA", "MNCN", "SCMA",
+    # Paper & Materials sharia stocks
+    "INKP", "TKIM",
+    # Additional liquid sharia stocks
+    "BTPS", "SRTG", "MLPT", "KPIG", "BMTR",
+    "LSIP", "AALI", "SSMS", "SILO", "AUTO",
+    "SMDR", "INKA",
+]
+
 # Major sectors in IDX
 IDX_SECTORS = {
     "A": "Agriculture",
@@ -78,11 +109,19 @@ class IDXIndexSource:
         """
         return LQ45_SYMBOLS.copy()
 
+    def get_jii70_symbols(self) -> list[str]:
+        """Get list of JII70 component symbols (Jakarta Islamic Index 70).
+
+        Returns:
+            List of sharia-compliant stock symbols in JII70
+        """
+        return JII70_SYMBOLS.copy()
+
     def get_index_symbols(self, index_name: str) -> list[str]:
         """Get component symbols for a given index.
 
         Args:
-            index_name: Index name (IDX30, LQ45)
+            index_name: Index name (IDX30, LQ45, JII70)
 
         Returns:
             List of stock symbols
@@ -92,6 +131,8 @@ class IDXIndexSource:
             return self.get_idx30_symbols()
         elif index_name == "LQ45":
             return self.get_lq45_symbols()
+        elif index_name == "JII70":
+            return self.get_jii70_symbols()
         else:
             logger.warning(f"Unknown index: {index_name}")
             return []
@@ -117,6 +158,17 @@ class IDXIndexSource:
             List of stock dictionaries
         """
         return self._get_index_stocks(LQ45_SYMBOLS, "LQ45", include_prices)
+
+    def get_jii70_stocks(self, include_prices: bool = False) -> list[dict[str, Any]]:
+        """Get JII70 stocks with basic info (Jakarta Islamic Index 70).
+
+        Args:
+            include_prices: Whether to fetch current prices
+
+        Returns:
+            List of sharia-compliant stock dictionaries
+        """
+        return self._get_index_stocks(JII70_SYMBOLS, "JII70", include_prices)
 
     def _get_index_stocks(
         self, symbols: list[str], index_name: str, include_prices: bool
@@ -170,6 +222,7 @@ class IDXIndexSource:
         if info:
             info["is_idx30"] = symbol in IDX30_SYMBOLS
             info["is_lq45"] = symbol in LQ45_SYMBOLS
+            info["is_jii70"] = symbol in JII70_SYMBOLS
 
         return info
 
@@ -300,3 +353,8 @@ def get_idx30() -> list[str]:
 def get_lq45() -> list[str]:
     """Quick function to get LQ45 symbols."""
     return LQ45_SYMBOLS.copy()
+
+
+def get_jii70() -> list[str]:
+    """Quick function to get JII70 symbols (Jakarta Islamic Index 70)."""
+    return JII70_SYMBOLS.copy()

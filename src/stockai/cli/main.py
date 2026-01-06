@@ -62,7 +62,7 @@ def main(
 
 @app.command("list")
 def list_stocks(
-    index: str = typer.Option("IDX30", "--index", "-i", help="Index to list (IDX30, LQ45)"),
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index to list (IDX30, LQ45, JII70)"),
     prices: bool = typer.Option(False, "--prices", "-p", help="Include current prices"),
 ) -> None:
     """List stocks in an index.
@@ -70,6 +70,7 @@ def list_stocks(
     Examples:
         stock list
         stock list --index LQ45
+        stock list --index JII70
         stock list --prices
     """
     index = index.upper()
@@ -81,8 +82,10 @@ def list_stocks(
         stocks = idx_source.get_idx30_stocks(include_prices=prices)
     elif index == "LQ45":
         stocks = idx_source.get_lq45_stocks(include_prices=prices)
+    elif index == "JII70":
+        stocks = idx_source.get_jii70_stocks(include_prices=prices)
     else:
-        console.print(f"[red]Error:[/red] Unknown index {index}. Use IDX30 or LQ45.")
+        console.print(f"[red]Error:[/red] Unknown index {index}. Use IDX30, LQ45, or JII70.")
         raise typer.Exit(1)
 
     table = Table(title=f"📊 {index} Stocks ({len(stocks)} total)", show_header=True)
@@ -772,7 +775,7 @@ def volume(
 
 @app.command()
 def suggest(
-    index: str = typer.Option("IDX30", "--index", "-i", help="Index to scan (IDX30, LQ45)"),
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index to scan (IDX30, LQ45, JII70)"),
     min_score: float = typer.Option(0.6, "--min-score", "-m", help="Minimum signal score (0-1)"),
     top: int = typer.Option(10, "--top", "-t", help="Number of top suggestions"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed analysis"),
@@ -785,6 +788,7 @@ def suggest(
     Examples:
         stock suggest
         stock suggest --index LQ45
+        stock suggest --index JII70
         stock suggest --min-score 0.7 --top 5
     """
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
@@ -800,8 +804,10 @@ def suggest(
         stocks = idx_source.get_idx30_stocks()
     elif index == "LQ45":
         stocks = idx_source.get_lq45_stocks()
+    elif index == "JII70":
+        stocks = idx_source.get_jii70_stocks()
     else:
-        console.print(f"[red]Error:[/red] Unknown index {index}. Use IDX30 or LQ45.")
+        console.print(f"[red]Error:[/red] Unknown index {index}. Use IDX30, LQ45, or JII70.")
         raise typer.Exit(1)
 
     if not stocks:
@@ -4418,7 +4424,10 @@ def risk_portfolio() -> None:
 # =============================================================================
 
 @app.command("morning")
-def briefing_morning() -> None:
+def briefing_morning(
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index for watchlist (IDX30, LQ45, JII70)"),
+    with_suggestions: bool = typer.Option(False, "--suggest", "-s", help="Include buy suggestions from index"),
+) -> None:
     """Get morning briefing before market open.
 
     Shows critical alerts, portfolio snapshot, and today's focus.
@@ -4426,11 +4435,14 @@ def briefing_morning() -> None:
 
     Examples:
         stockai morning
+        stockai morning --index JII70
+        stockai morning --index JII70 --suggest
     """
     from stockai.briefing.daily import generate_morning_briefing, format_morning_briefing
     from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
     from stockai.data.sources.yahoo import YahooFinanceSource
 
+    index = index.upper()
     path = get_default_paper_path()
     portfolio = None
 
@@ -4463,12 +4475,141 @@ def briefing_morning() -> None:
             "initial_capital": account.initial_capital,
         }
 
-    briefing = generate_morning_briefing(portfolio=portfolio)
+    # Get watchlist based on selected index
+    idx_source = IDXIndexSource()
+    if index == "IDX30":
+        watchlist = idx_source.get_idx30_symbols()[:5]
+    elif index == "LQ45":
+        watchlist = idx_source.get_lq45_symbols()[:5]
+    elif index == "JII70":
+        watchlist = idx_source.get_jii70_symbols()[:5]
+    else:
+        console.print(f"[yellow]Warning:[/yellow] Unknown index {index}, using IDX30")
+        watchlist = idx_source.get_idx30_symbols()[:5]
+
+    briefing = generate_morning_briefing(portfolio=portfolio, watchlist=watchlist)
     console.print(format_morning_briefing(briefing))
+
+    # Show buy suggestions if requested
+    if with_suggestions:
+        console.print(f"\n[bold]📈 Top Buy Suggestions from {index}[/bold]\n")
+        # Call suggest command logic
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+        import pandas as pd
+        import numpy as np
+
+        if index == "IDX30":
+            stocks = idx_source.get_idx30_stocks()
+        elif index == "LQ45":
+            stocks = idx_source.get_lq45_stocks()
+        elif index == "JII70":
+            stocks = idx_source.get_jii70_stocks()
+        else:
+            stocks = idx_source.get_idx30_stocks()
+
+        yahoo = YahooFinanceSource()
+        results = []
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=console,
+        ) as progress:
+            task = progress.add_task(f"Scanning {len(stocks)} stocks...", total=len(stocks))
+
+            for stock in stocks:
+                symbol = stock["symbol"]
+                try:
+                    df = yahoo.get_price_history(symbol, period="3mo")
+                    if df.empty or len(df) < 20:
+                        progress.advance(task)
+                        continue
+
+                    close = df["Close"].values
+                    # RSI
+                    delta = np.diff(close)
+                    gains = np.where(delta > 0, delta, 0)
+                    losses = np.where(delta < 0, -delta, 0)
+                    avg_gain = np.mean(gains[-14:]) if len(gains) >= 14 else 0
+                    avg_loss = np.mean(losses[-14:]) if len(losses) >= 14 else 0
+                    rs = avg_gain / avg_loss if avg_loss > 0 else 100
+                    rsi = 100 - (100 / (1 + rs))
+
+                    # MACD
+                    ema12 = pd.Series(close).ewm(span=12).mean().iloc[-1]
+                    ema26 = pd.Series(close).ewm(span=26).mean().iloc[-1]
+                    macd = ema12 - ema26
+                    signal_line = pd.Series(close).ewm(span=12).mean().ewm(span=9).mean().iloc[-1]
+                    macd_bullish = macd > signal_line
+
+                    # Bollinger Bands
+                    sma20 = np.mean(close[-20:])
+                    std20 = np.std(close[-20:])
+                    lower_band = sma20 - 2 * std20
+                    current_price = close[-1]
+                    near_lower = current_price < sma20 - std20
+
+                    # Score
+                    score = 0
+                    signals = []
+                    if rsi < 30:
+                        score += 40
+                        signals.append("RSI oversold")
+                    elif rsi < 40:
+                        score += 20
+                    if macd_bullish:
+                        score += 30
+                        signals.append("MACD bullish")
+                    if near_lower:
+                        score += 20
+                        signals.append("Near lower BB")
+
+                    if score >= 60:
+                        results.append({
+                            "symbol": symbol,
+                            "score": score,
+                            "rsi": rsi,
+                            "macd_bullish": macd_bullish,
+                            "price": current_price,
+                            "signals": signals,
+                        })
+                except Exception:
+                    pass
+                progress.advance(task)
+
+        results.sort(key=lambda x: x["score"], reverse=True)
+        top_3 = results[:3]
+
+        if top_3:
+            table = Table(show_header=True)
+            table.add_column("#", style="dim", width=3)
+            table.add_column("Symbol", style="cyan")
+            table.add_column("Score", justify="center")
+            table.add_column("RSI", justify="right")
+            table.add_column("Price", justify="right")
+            table.add_column("Signals")
+
+            for i, r in enumerate(top_3, 1):
+                signal_str = "STRONG BUY" if r["score"] >= 80 else "BUY"
+                table.add_row(
+                    str(i),
+                    r["symbol"],
+                    f"{r['score']}%",
+                    f"{r['rsi']:.0f}",
+                    f"Rp {r['price']:,.0f}",
+                    f"[green]{signal_str}[/green]",
+                )
+            console.print(table)
+        else:
+            console.print("[dim]No strong buy signals found[/dim]")
 
 
 @app.command("evening")
-def briefing_evening() -> None:
+def briefing_evening(
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index for market context (IDX30, LQ45, JII70)"),
+) -> None:
     """Get evening briefing after market close.
 
     Shows today's performance, trades, and tomorrow's focus.
@@ -4476,7 +4617,12 @@ def briefing_evening() -> None:
 
     Examples:
         stockai evening
+        stockai evening --index JII70
     """
+    index = index.upper()
+    if index not in ("IDX30", "LQ45", "JII70"):
+        console.print(f"[red]Unknown index {index}. Use IDX30, LQ45, or JII70.[/red]")
+        raise typer.Exit(1)
     from stockai.briefing.daily import generate_evening_briefing, format_evening_briefing
     from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
     from stockai.data.sources.yahoo import YahooFinanceSource
@@ -4531,7 +4677,9 @@ def briefing_evening() -> None:
 
 
 @app.command("weekly")
-def briefing_weekly() -> None:
+def briefing_weekly(
+    index: str = typer.Option("IDX30", "--index", "-i", help="Index for market context (IDX30, LQ45, JII70)"),
+) -> None:
     """Get weekly performance review.
 
     Shows week's performance, trade analysis, and lessons learned.
@@ -4539,7 +4687,12 @@ def briefing_weekly() -> None:
 
     Examples:
         stockai weekly
+        stockai weekly --index JII70
     """
+    index = index.upper()
+    if index not in ("IDX30", "LQ45", "JII70"):
+        console.print(f"[red]Unknown index {index}. Use IDX30, LQ45, or JII70.[/red]")
+        raise typer.Exit(1)
     from stockai.briefing.weekly import generate_weekly_review, format_weekly_review
     from stockai.tutorial.paper_trading import PaperTradingAccount, get_default_paper_path
     from stockai.data.sources.yahoo import YahooFinanceSource
