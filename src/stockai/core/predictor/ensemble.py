@@ -294,10 +294,15 @@ class EnsemblePredictor:
         # Train XGBoost
         logger.info("Training XGBoost model...")
         try:
+            # Reinitialize with custom params if provided
+            if xgboost_params:
+                self.xgboost = XGBoostPredictor(
+                    model_params=xgboost_params,
+                    model_path=self.xgboost.model_path,
+                )
             xgb_metrics = self.xgboost.train(
                 train_df,
                 horizon=horizon,
-                **(xgboost_params or {}),
             )
             results["xgboost"] = xgb_metrics
             self.models_loaded["xgboost"] = True
