@@ -4527,54 +4527,12 @@ def briefing_morning(
                         progress.advance(task)
                         continue
 
-                    close = df["Close"].values
-                    # RSI
-                    delta = np.diff(close)
-                    gains = np.where(delta > 0, delta, 0)
-                    losses = np.where(delta < 0, -delta, 0)
-                    avg_gain = np.mean(gains[-14:]) if len(gains) >= 14 else 0
-                    avg_loss = np.mean(losses[-14:]) if len(losses) >= 14 else 0
-                    rs = avg_gain / avg_loss if avg_loss > 0 else 100
-                    rsi = 100 - (100 / (1 + rs))
+                    # Use the same algorithm as suggest command
+                    signals = _calculate_buy_signals(df)
+                    signals["symbol"] = symbol
 
-                    # MACD
-                    ema12 = pd.Series(close).ewm(span=12).mean().iloc[-1]
-                    ema26 = pd.Series(close).ewm(span=26).mean().iloc[-1]
-                    macd = ema12 - ema26
-                    signal_line = pd.Series(close).ewm(span=12).mean().ewm(span=9).mean().iloc[-1]
-                    macd_bullish = macd > signal_line
-
-                    # Bollinger Bands
-                    sma20 = np.mean(close[-20:])
-                    std20 = np.std(close[-20:])
-                    lower_band = sma20 - 2 * std20
-                    current_price = close[-1]
-                    near_lower = current_price < sma20 - std20
-
-                    # Score
-                    score = 0
-                    signals = []
-                    if rsi < 30:
-                        score += 40
-                        signals.append("RSI oversold")
-                    elif rsi < 40:
-                        score += 20
-                    if macd_bullish:
-                        score += 30
-                        signals.append("MACD bullish")
-                    if near_lower:
-                        score += 20
-                        signals.append("Near lower BB")
-
-                    if score >= 60:
-                        results.append({
-                            "symbol": symbol,
-                            "score": score,
-                            "rsi": rsi,
-                            "macd_bullish": macd_bullish,
-                            "price": current_price,
-                            "signals": signals,
-                        })
+                    if signals["score"] >= 0.6:  # 60% threshold
+                        results.append(signals)
                 except Exception:
                     pass
                 progress.advance(task)
@@ -4588,22 +4546,36 @@ def briefing_morning(
             table.add_column("Symbol", style="cyan")
             table.add_column("Score", justify="center")
             table.add_column("RSI", justify="right")
+            table.add_column("MACD", justify="center")
             table.add_column("Price", justify="right")
-            table.add_column("Signals")
+            table.add_column("Signal", justify="center")
 
             for i, r in enumerate(top_3, 1):
-                signal_str = "STRONG BUY" if r["score"] >= 80 else "BUY"
+                score = r["score"]
+                if score >= 0.8:
+                    score_str = f"[green]{score:.0%}[/green]"
+                    signal_str = "[bold green]STRONG BUY[/bold green]"
+                elif score >= 0.6:
+                    score_str = f"[yellow]{score:.0%}[/yellow]"
+                    signal_str = "[yellow]BUY[/yellow]"
+                else:
+                    score_str = f"[dim]{score:.0%}[/dim]"
+                    signal_str = "[dim]HOLD[/dim]"
+
+                macd_icon = "↑" if r["macd_signal"] == "BULLISH" else "↓" if r["macd_signal"] == "BEARISH" else "−"
+
                 table.add_row(
                     str(i),
                     r["symbol"],
-                    f"{r['score']}%",
+                    score_str,
                     f"{r['rsi']:.0f}",
-                    f"Rp {r['price']:,.0f}",
-                    f"[green]{signal_str}[/green]",
+                    macd_icon,
+                    f"Rp {r['current_price']:,.0f}",
+                    signal_str,
                 )
             console.print(table)
         else:
-            console.print("[dim]No strong buy signals found[/dim]")
+            console.print("[dim]No buy signals found (score >= 60%)[/dim]")
 
 
 @app.command("evening")
