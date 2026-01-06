@@ -60,7 +60,7 @@ class AIValidatorConfig:
     max_concurrent: int = 3  # Parallel validation limit
 
     # Timeouts
-    per_stock_timeout: float = 60.0  # Seconds per validation
+    per_stock_timeout: float = 120.0  # Seconds per validation
     max_retries: int = 1
     retry_delay: float = 2.0
 
