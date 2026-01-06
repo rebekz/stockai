@@ -4734,5 +4734,281 @@ def briefing_weekly(
     console.print(format_weekly_review(review))
 
 
+# =====================================
+# Autopilot Trading Commands
+# =====================================
+
+autopilot_app = typer.Typer(help="Automated daily trading system")
+app.add_typer(autopilot_app, name="autopilot")
+
+
+@autopilot_app.command("run")
+def autopilot_run(
+    index: str = typer.Option("JII70", "--index", "-i", help="Index to scan (JII70, IDX30, LQ45, ALL)"),
+    capital: Optional[float] = typer.Option(None, "--capital", "-c", help="Available capital in Rupiah"),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show signals without executing"),
+    force: bool = typer.Option(False, "--force", "-f", help="Execute even if already run today"),
+) -> None:
+    """Execute daily autopilot workflow.
+
+    Scans index stocks, generates signals, and executes paper trades.
+
+    Examples:
+        stockai autopilot run
+        stockai autopilot run --index IDX30
+        stockai autopilot run --capital 50000000
+        stockai autopilot run --dry-run
+    """
+    from stockai.autopilot import AutopilotEngine, AutopilotConfig
+    from stockai.autopilot.engine import IndexType, format_autopilot_result
+    from stockai.autopilot.executor import PaperExecutor
+    from pathlib import Path
+
+    index = index.upper()
+    if index not in ("JII70", "IDX30", "LQ45", "ALL"):
+        console.print(f"[red]Unknown index {index}. Use JII70, IDX30, LQ45, or ALL.[/red]")
+        raise typer.Exit(1)
+
+    # Load paper portfolio
+    executor = PaperExecutor()
+    portfolio_data = None
+
+    # Try to load existing portfolio
+    executor.load_portfolio()
+    if executor.portfolio:
+        portfolio_data = executor.get_portfolio_for_engine()
+        if capital is None:
+            capital = executor.portfolio.initial_capital
+    elif capital is None:
+        capital = 10_000_000  # Default 10M IDR
+
+    # Create config
+    config = AutopilotConfig(
+        index=IndexType[index],
+        capital=capital,
+        dry_run=dry_run,
+    )
+
+    console.print(f"\n[bold cyan]🤖 AUTOPILOT[/bold cyan] - Scanning {index}...")
+    console.print(f"   Capital: Rp {capital:,.0f} | Dry run: {dry_run}")
+    console.print()
+
+    with console.status("[bold green]Running autopilot..."):
+        engine = AutopilotEngine(config)
+        result = engine.run(portfolio=portfolio_data)
+
+    # Display results
+    console.print(format_autopilot_result(result))
+
+    # If not dry run, update paper portfolio
+    if not dry_run and result.executed_buys or result.executed_sells:
+        # Create portfolio if doesn't exist
+        if not executor.portfolio:
+            executor.create_portfolio(capital)
+
+        # Execute trades
+        for trade in result.executed_sells:
+            executor.sell(trade.symbol, trade.lots, trade.current_price)
+
+        for trade in result.executed_buys:
+            executor.buy(
+                trade.symbol,
+                trade.lots,
+                trade.current_price,
+                stop_loss=trade.stop_loss,
+                target=trade.target,
+            )
+
+        console.print("[green]✓ Paper portfolio updated[/green]")
+
+
+@autopilot_app.command("status")
+def autopilot_status() -> None:
+    """Show current autopilot portfolio status.
+
+    Examples:
+        stockai autopilot status
+    """
+    from stockai.autopilot.executor import PaperExecutor, format_portfolio_for_display
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    executor = PaperExecutor()
+    portfolio = executor.load_portfolio()
+
+    if not portfolio:
+        console.print("[yellow]No autopilot portfolio found.[/yellow]")
+        console.print("Run 'stockai autopilot run' to create one.")
+        raise typer.Exit(0)
+
+    # Update prices
+    source = YahooFinanceSource()
+    prices = {}
+    for symbol in portfolio.positions:
+        try:
+            info = source.get_current_price(symbol)
+            if info:
+                prices[symbol] = info.get("price", 0)
+        except Exception:
+            pass
+
+    executor.update_prices(prices)
+    portfolio = executor.portfolio
+
+    console.print(format_portfolio_for_display(portfolio))
+
+
+@autopilot_app.command("alerts")
+def autopilot_alerts() -> None:
+    """Show triggered alerts for current positions.
+
+    Examples:
+        stockai autopilot alerts
+    """
+    from stockai.autopilot.executor import PaperExecutor
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    executor = PaperExecutor()
+    portfolio = executor.load_portfolio()
+
+    if not portfolio:
+        console.print("[yellow]No autopilot portfolio found.[/yellow]")
+        raise typer.Exit(0)
+
+    # Update prices
+    source = YahooFinanceSource()
+    prices = {}
+    for symbol in portfolio.positions:
+        try:
+            info = source.get_current_price(symbol)
+            if info:
+                prices[symbol] = info.get("price", 0)
+        except Exception:
+            pass
+
+    executor.update_prices(prices)
+    portfolio = executor.portfolio
+
+    alerts = []
+
+    for symbol, pos in portfolio.positions.items():
+        # Check stop-loss
+        if pos.stop_loss and pos.current_price > 0:
+            distance_pct = ((pos.current_price - pos.stop_loss) / pos.current_price) * 100
+
+            if pos.current_price <= pos.stop_loss:
+                alerts.append(("critical", f"🔴 {symbol}: STOP-LOSS HIT @ Rp {pos.current_price:,.0f}"))
+            elif distance_pct < 3:
+                alerts.append(("warning", f"⚠️  {symbol}: {distance_pct:.1f}% above stop-loss"))
+
+        # Check target
+        if pos.target and pos.current_price > 0:
+            if pos.current_price >= pos.target:
+                alerts.append(("info", f"🎯 {symbol}: TARGET REACHED @ Rp {pos.current_price:,.0f}"))
+            elif pos.current_price >= pos.target * 0.97:
+                alerts.append(("info", f"📈 {symbol}: {((pos.target - pos.current_price) / pos.current_price * 100):.1f}% below target"))
+
+    if alerts:
+        console.print("\n[bold]📢 AUTOPILOT ALERTS[/bold]\n")
+        for level, message in alerts:
+            console.print(f"   {message}")
+        console.print()
+    else:
+        console.print("\n[green]✓ No alerts - all positions within normal range[/green]\n")
+
+
+@autopilot_app.command("history")
+def autopilot_history(
+    days: int = typer.Option(30, "--days", "-d", help="Number of days of history to show"),
+) -> None:
+    """Show autopilot trade history.
+
+    Examples:
+        stockai autopilot history
+        stockai autopilot history --days 7
+    """
+    from stockai.autopilot.engine import get_autopilot_history, format_autopilot_history
+
+    history = get_autopilot_history(days=days)
+
+    if not history:
+        console.print("[yellow]No autopilot history found.[/yellow]")
+        console.print(f"[dim]Searched last {days} days[/dim]")
+        raise typer.Exit(0)
+
+    console.print(format_autopilot_history(history))
+
+
+@autopilot_app.command("rebalance")
+def autopilot_rebalance(
+    dry_run: bool = typer.Option(True, "--dry-run/--execute", help="Preview changes vs execute"),
+) -> None:
+    """Monthly portfolio rebalancing.
+
+    Reviews all positions and suggests rebalancing trades.
+
+    Examples:
+        stockai autopilot rebalance
+        stockai autopilot rebalance --execute
+    """
+    from stockai.autopilot.executor import PaperExecutor
+    from stockai.scoring.factors import score_stock
+    from stockai.data.sources.yahoo import YahooFinanceSource
+
+    executor = PaperExecutor()
+    portfolio = executor.load_portfolio()
+
+    if not portfolio:
+        console.print("[yellow]No autopilot portfolio found.[/yellow]")
+        raise typer.Exit(0)
+
+    source = YahooFinanceSource()
+
+    console.print("\n[bold]🔄 MONTHLY REBALANCE REVIEW[/bold]\n")
+
+    # Score each position
+    for symbol, pos in portfolio.positions.items():
+        info = source.get_stock_info(symbol)
+        if not info:
+            console.print(f"   {symbol}: [red]Unable to fetch data[/red]")
+            continue
+
+        history = source.get_price_history(symbol, period="6mo")
+
+        # Calculate returns
+        price_data = {}
+        if not history.empty:
+            closes = history["close"].values
+            if len(closes) >= 120:
+                price_data["returns_6m"] = ((closes[-1] / closes[0]) - 1) * 100
+
+        fundamentals = {
+            "pe_ratio": info.get("pe_ratio"),
+            "pb_ratio": info.get("pb_ratio"),
+        }
+
+        scores = score_stock(symbol, fundamentals, price_data)
+
+        action = "HOLD"
+        color = "yellow"
+        if scores.composite_score >= 70:
+            action = "HOLD/ADD"
+            color = "green"
+        elif scores.composite_score < 50:
+            action = "CONSIDER SELLING"
+            color = "red"
+
+        current_price = info.get("current_price", pos.avg_price)
+        pnl_pct = ((current_price / pos.avg_price) - 1) * 100 if pos.avg_price > 0 else 0
+
+        console.print(f"   {symbol}: Score {scores.composite_score:.0f} | P&L: {pnl_pct:+.1f}% | [{color}]{action}[/{color}]")
+
+    console.print()
+
+    if dry_run:
+        console.print("[dim]Use --execute to apply rebalancing suggestions[/dim]")
+    else:
+        console.print("[yellow]Rebalancing execution not yet implemented[/yellow]")
+
+
 if __name__ == "__main__":
     app()

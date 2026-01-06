@@ -271,3 +271,59 @@ class CacheEntry(Base):
 
     def __repr__(self) -> str:
         return f"<CacheEntry(key='{self.cache_key}')>"
+
+
+class AutopilotRun(Base):
+    """Autopilot trading run session."""
+
+    __tablename__ = "autopilot_runs"
+
+    id = Column(Integer, primary_key=True)
+    run_date = Column(DateTime, nullable=False, index=True)
+    index_scanned = Column(String(10), nullable=False)  # JII70, IDX30, LQ45, ALL
+    stocks_scanned = Column(Integer, default=0)
+    signals_generated = Column(Integer, default=0)
+    trades_executed = Column(Integer, default=0)
+    initial_capital = Column(Numeric(20, 2))
+    final_value = Column(Numeric(20, 2))
+    is_dry_run = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    trades = relationship(
+        "AutopilotTrade", back_populates="run", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("ix_autopilot_runs_date", "run_date"),
+        UniqueConstraint("run_date", "index_scanned", "is_dry_run", name="uix_autopilot_run"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AutopilotRun(date='{self.run_date}', index='{self.index_scanned}', trades={self.trades_executed})>"
+
+
+class AutopilotTrade(Base):
+    """Individual trades executed by autopilot."""
+
+    __tablename__ = "autopilot_trades"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("autopilot_runs.id"), nullable=False, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    action = Column(String(4), nullable=False)  # BUY, SELL
+    lots = Column(Integer, nullable=False)
+    shares = Column(Integer, nullable=False)
+    price = Column(Numeric(12, 2), nullable=False)
+    total_value = Column(Numeric(20, 2), nullable=False)
+    score = Column(Float)
+    reason = Column(String(100))
+    stop_loss = Column(Numeric(12, 2))
+    target = Column(Numeric(12, 2))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    run = relationship("AutopilotRun", back_populates="trades")
+
+    def __repr__(self) -> str:
+        return f"<AutopilotTrade(symbol='{self.symbol}', action='{self.action}', lots={self.lots})>"
