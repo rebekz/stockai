@@ -4745,7 +4745,8 @@ app.add_typer(autopilot_app, name="autopilot")
 @autopilot_app.command("run")
 def autopilot_run(
     index: str = typer.Option("JII70", "--index", "-i", help="Index to scan (JII70, IDX30, LQ45, ALL)"),
-    capital: Optional[float] = typer.Option(None, "--capital", "-c", help="Available capital in Rupiah"),
+    capital: Optional[float] = typer.Option(None, "--capital", "-c", help="Available capital in Rupiah (omit for monitor mode)"),
+    monitor: bool = typer.Option(False, "--monitor", "-m", help="Monitor mode: analyze portfolio only, no new buys"),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show signals without executing"),
     force: bool = typer.Option(False, "--force", "-f", help="Execute even if already run today"),
     # AI Validation options
@@ -4760,11 +4761,15 @@ def autopilot_run(
     Scans index stocks, generates signals, validates with AI agents, and executes paper trades.
     AI agents have veto power - BUY signals require AI score >= threshold to proceed.
 
+    Use --monitor (or omit --capital) to analyze existing portfolio only (no new buys).
+    Monitor mode generates HOLD/SELL recommendations based on AI analysis.
+
     Examples:
         stockai autopilot run
         stockai autopilot run --index IDX30
         stockai autopilot run --capital 50000000
         stockai autopilot run --dry-run
+        stockai autopilot run --monitor             # Monitor mode: portfolio analysis only
         stockai autopilot run --no-ai              # Skip AI validation
         stockai autopilot run --ai-threshold 7.0   # Stricter AI approval
         stockai autopilot run --ai-verbose         # Show agent breakdown
@@ -4787,10 +4792,24 @@ def autopilot_run(
     executor.load_portfolio()
     if executor.portfolio:
         portfolio_data = executor.get_portfolio_for_engine()
+
+    # Determine mode: monitor mode if --monitor flag or no capital and no portfolio
+    is_monitor_mode = monitor or (capital is None and not executor.portfolio)
+
+    if is_monitor_mode:
+        # Monitor mode: no capital needed
+        if not executor.portfolio or not portfolio_data or not portfolio_data.get("positions"):
+            console.print("[yellow]No portfolio found to monitor.[/yellow]")
+            console.print("Create a portfolio first with 'stockai autopilot run --capital <amount>'")
+            raise typer.Exit(1)
+        capital = None  # Signal monitor mode to engine
+    else:
+        # Normal mode: use capital from portfolio or default
         if capital is None:
-            capital = executor.portfolio.initial_capital
-    elif capital is None:
-        capital = 10_000_000  # Default 10M IDR
+            if executor.portfolio:
+                capital = executor.portfolio.initial_capital
+            else:
+                capital = 10_000_000  # Default 10M IDR
 
     # Create config
     config = AutopilotConfig(
@@ -4804,20 +4823,27 @@ def autopilot_run(
         ai_verbose=ai_verbose,
     )
 
-    console.print(f"\n[bold cyan]🤖 AUTOPILOT[/bold cyan] - Scanning {index}...")
-    ai_status = f"AI: [green]ON[/green] (threshold ≥{ai_threshold})" if ai_enabled else "AI: [yellow]OFF[/yellow]"
-    console.print(f"   Capital: Rp {capital:,.0f} | Dry run: {dry_run} | {ai_status}")
+    # Display mode-specific header
+    if is_monitor_mode:
+        console.print(f"\n[bold cyan]📊 PORTFOLIO MONITOR[/bold cyan]")
+        ai_status = f"AI: [green]ON[/green]" if ai_enabled else "AI: [yellow]OFF[/yellow]"
+        console.print(f"   Mode: MONITOR (analyzing existing positions) | {ai_status}")
+    else:
+        console.print(f"\n[bold cyan]🤖 AUTOPILOT[/bold cyan] - Scanning {index}...")
+        ai_status = f"AI: [green]ON[/green] (threshold ≥{ai_threshold})" if ai_enabled else "AI: [yellow]OFF[/yellow]"
+        console.print(f"   Capital: Rp {capital:,.0f} | Dry run: {dry_run} | {ai_status}")
     console.print()
 
-    with console.status("[bold green]Running autopilot..."):
+    status_msg = "[bold green]Monitoring portfolio..." if is_monitor_mode else "[bold green]Running autopilot..."
+    with console.status(status_msg):
         engine = AutopilotEngine(config)
         result = engine.run(portfolio=portfolio_data)
 
     # Display results
-    console.print(format_autopilot_result(result))
+    console.print(format_autopilot_result(result, verbose=ai_verbose))
 
-    # If not dry run, update paper portfolio
-    if not dry_run and result.executed_buys or result.executed_sells:
+    # If not dry run and not monitor mode, update paper portfolio
+    if not dry_run and not is_monitor_mode and (result.executed_buys or result.executed_sells):
         # Create portfolio if doesn't exist
         if not executor.portfolio:
             executor.create_portfolio(capital)

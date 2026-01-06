@@ -51,8 +51,8 @@ class AutopilotConfig:
     # Index selection
     index: IndexType = IndexType.JII70
 
-    # Capital management
-    capital: float = 10_000_000  # Default 10M IDR
+    # Capital management (None = monitor mode, no new buys)
+    capital: float | None = 10_000_000  # Default 10M IDR, None for monitor mode
 
     # Risk parameters
     max_risk_percent: float = 2.0  # 2% risk per trade
@@ -76,6 +76,11 @@ class AutopilotConfig:
     ai_sell_threshold: float = 5.0  # AI score <= 5.0 for SELL confirmation
     ai_concurrency: int = 3  # Parallel validation limit
     ai_verbose: bool = False  # Show detailed agent analysis
+
+    @property
+    def is_monitor_mode(self) -> bool:
+        """Check if running in monitor mode (no capital for new buys)."""
+        return self.capital is None or self.capital <= 0
 
 
 @dataclass
@@ -105,12 +110,34 @@ class TradeSignal:
 
 
 @dataclass
+class MonitorRecommendation:
+    """Recommendation for a monitored portfolio position."""
+
+    symbol: str
+    action: str  # HOLD, SELL
+    shares: int
+    avg_price: float
+    current_price: float
+    unrealized_pnl: float
+    unrealized_pnl_percent: float
+    factor_score: float
+    ai_score: float | None = None
+    ai_recommendation: str | None = None
+    ai_key_reasons: list[str] = field(default_factory=list)
+    ai_risk_factors: list[str] = field(default_factory=list)
+    reason: str = ""
+
+
+@dataclass
 class AutopilotResult:
     """Result of an autopilot run."""
 
     run_date: datetime
     index_scanned: str
-    capital: float
+    capital: float | None
+
+    # Monitor mode flag
+    is_monitor_mode: bool = False
 
     # Scan results
     stocks_scanned: int = 0
@@ -126,6 +153,10 @@ class AutopilotResult:
     ai_rejected_buys: list[TradeSignal] = field(default_factory=list)
     ai_approved_sells: list[TradeSignal] = field(default_factory=list)
     ai_rejected_sells: list[TradeSignal] = field(default_factory=list)
+
+    # Monitor mode recommendations
+    hold_recommendations: list[MonitorRecommendation] = field(default_factory=list)
+    sell_recommendations: list[MonitorRecommendation] = field(default_factory=list)
 
     # Execution
     executed_buys: list[TradeSignal] = field(default_factory=list)
@@ -159,7 +190,7 @@ class AutopilotEngine:
 
         # Paper portfolio state (would load from DB in production)
         self.positions: dict[str, dict] = {}
-        self.cash = self.config.capital
+        self.cash = self.config.capital if self.config.capital else 0
 
         # AI Validator (lazy-loaded to avoid LLM init overhead)
         self._ai_validator: AIValidator | None = None
@@ -184,26 +215,37 @@ class AutopilotEngine:
     ) -> AutopilotResult:
         """Execute the daily autopilot workflow.
 
+        In normal mode: Scan index, generate signals, validate with AI, execute trades.
+        In monitor mode (no capital): Analyze existing portfolio, generate HOLD/SELL recommendations.
+
         Args:
             portfolio: Current portfolio state (positions, cash)
 
         Returns:
             AutopilotResult with all run details
         """
+        is_monitor_mode = self.config.is_monitor_mode
+
         result = AutopilotResult(
             run_date=datetime.now(TIMEZONE),
-            index_scanned=self.config.index.value,
+            index_scanned=self.config.index.value if not is_monitor_mode else "PORTFOLIO",
             capital=self.config.capital,
             ai_enabled=self.config.ai_enabled,
+            is_monitor_mode=is_monitor_mode,
         )
 
         # Load portfolio if provided
         if portfolio:
             self.positions = portfolio.get("positions", {})
-            self.cash = portfolio.get("cash", self.config.capital)
+            self.cash = portfolio.get("cash", 0) if is_monitor_mode else portfolio.get("cash", self.config.capital or 0)
 
         result.cash_remaining = self.cash
 
+        # MONITOR MODE: Analyze existing portfolio only
+        if is_monitor_mode:
+            return self._run_monitor_mode(result)
+
+        # NORMAL MODE: Full autopilot workflow
         # Phase 1: SCAN
         logger.info(f"Scanning {self.config.index.value} stocks...")
         symbols = self._get_index_symbols()
@@ -270,6 +312,158 @@ class AutopilotEngine:
         self._save_run_to_db(result)
 
         return result
+
+    def _run_monitor_mode(self, result: AutopilotResult) -> AutopilotResult:
+        """Run monitor mode - analyze portfolio and generate HOLD/SELL recommendations.
+
+        Args:
+            result: AutopilotResult to populate
+
+        Returns:
+            Updated AutopilotResult with recommendations
+        """
+        if not self.positions:
+            logger.info("No positions to monitor")
+            result.alerts.append("No portfolio positions found to monitor")
+            return result
+
+        logger.info(f"Monitoring {len(self.positions)} portfolio positions...")
+        result.positions_count = len(self.positions)
+
+        # Analyze each position
+        recommendations = []
+        for symbol, pos in self.positions.items():
+            try:
+                # Get current price
+                price_info = self.yahoo_source.get_current_price(symbol)
+                if not price_info:
+                    logger.warning(f"No price data for {symbol}")
+                    continue
+
+                current_price = price_info.get("price", 0)
+                if current_price <= 0:
+                    continue
+
+                shares = pos.get("shares", 0)
+                avg_price = pos.get("avg_price", current_price)
+
+                # Calculate P&L
+                unrealized_pnl = (current_price - avg_price) * shares
+                unrealized_pnl_percent = ((current_price / avg_price) - 1) * 100 if avg_price > 0 else 0
+
+                # Get stock info and calculate factor score
+                info = self.yahoo_source.get_stock_info(symbol)
+                history = self.yahoo_source.get_price_history(symbol, period="6mo")
+                price_data = self._calculate_price_metrics(history)
+
+                fundamentals = {
+                    "pe_ratio": info.get("pe_ratio") if info else None,
+                    "pb_ratio": info.get("pb_ratio") if info else None,
+                    "roe": None,
+                    "debt_to_equity": None,
+                    "profit_margin": None,
+                }
+
+                factor_scores = score_stock(
+                    symbol=symbol,
+                    fundamentals=fundamentals,
+                    price_data=price_data,
+                )
+
+                # Create recommendation based on factor score
+                rec = MonitorRecommendation(
+                    symbol=symbol,
+                    action="HOLD",  # Default, may change after AI
+                    shares=shares,
+                    avg_price=avg_price,
+                    current_price=current_price,
+                    unrealized_pnl=unrealized_pnl,
+                    unrealized_pnl_percent=unrealized_pnl_percent,
+                    factor_score=factor_scores.composite_score,
+                )
+
+                # Determine preliminary action based on score
+                if factor_scores.composite_score < self.config.sell_threshold:
+                    rec.action = "SELL"
+                    rec.reason = f"Score {factor_scores.composite_score:.0f} < {self.config.sell_threshold}"
+
+                recommendations.append(rec)
+
+            except Exception as e:
+                logger.error(f"Error analyzing {symbol}: {e}")
+                result.errors.append(f"Error analyzing {symbol}: {e}")
+
+        # AI validation for recommendations (if enabled)
+        if self.config.ai_enabled and recommendations:
+            logger.info("Running AI analysis on portfolio positions...")
+            recommendations = self._validate_recommendations_with_ai(recommendations)
+
+        # Separate into HOLD and SELL
+        result.hold_recommendations = [r for r in recommendations if r.action == "HOLD"]
+        result.sell_recommendations = [r for r in recommendations if r.action == "SELL"]
+
+        # Calculate portfolio value
+        result.portfolio_value = self._calculate_portfolio_value()
+        result.stocks_scanned = len(self.positions)
+
+        # Generate alerts
+        result.alerts = self._check_alerts()
+
+        return result
+
+    def _validate_recommendations_with_ai(
+        self, recommendations: list[MonitorRecommendation]
+    ) -> list[MonitorRecommendation]:
+        """Validate recommendations using AI analysis.
+
+        Args:
+            recommendations: List of recommendations to validate
+
+        Returns:
+            Updated recommendations with AI scores and suggestions
+        """
+        # Prepare batch for validation
+        validation_requests = [
+            (r.symbol, "HOLD" if r.action == "HOLD" else "SELL", r.factor_score)
+            for r in recommendations
+        ]
+
+        # Run async validation
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        validation_results = loop.run_until_complete(
+            self.ai_validator.validate_signals_batch(validation_requests)
+        )
+
+        # Apply AI results to recommendations
+        for rec, ai_result in zip(recommendations, validation_results):
+            rec.ai_score = ai_result.ai_composite_score
+            rec.ai_recommendation = ai_result.recommendation
+            rec.ai_key_reasons = ai_result.key_reasons
+            rec.ai_risk_factors = ai_result.risk_factors
+
+            # AI can suggest SELL even if factor score says HOLD
+            if ai_result.recommendation in ("SELL", "STRONG SELL", "STRONG_SELL"):
+                rec.action = "SELL"
+                rec.reason = f"AI recommends SELL (score: {ai_result.ai_composite_score:.1f})"
+            elif ai_result.recommendation in ("BUY", "STRONG BUY", "STRONG_BUY"):
+                # Strong position, keep holding
+                rec.action = "HOLD"
+                rec.reason = f"AI recommends holding (score: {ai_result.ai_composite_score:.1f})"
+            elif rec.action == "SELL" and ai_result.ai_composite_score >= 6.0:
+                # Factor says SELL but AI says stock is fine - keep holding
+                rec.action = "HOLD"
+                rec.reason = f"AI overrides SELL (score: {ai_result.ai_composite_score:.1f})"
+
+            logger.info(
+                f"{rec.symbol}: {rec.action} (AI: {rec.ai_score:.1f}, Factor: {rec.factor_score:.0f})"
+            )
+
+        return recommendations
 
     def _validate_signals_with_ai(
         self, signals: list[TradeSignal]
@@ -833,6 +1027,88 @@ class AutopilotEngine:
         return alerts
 
 
+def format_monitor_result(result: AutopilotResult, verbose: bool = False) -> str:
+    """Format monitor mode result for CLI display.
+
+    Args:
+        result: AutopilotResult with monitor recommendations
+        verbose: Show detailed AI analysis
+
+    Returns:
+        Formatted string
+    """
+    ai_status = "AI: ON" if result.ai_enabled else "AI: OFF"
+    lines = [
+        "=" * 60,
+        f"PORTFOLIO MONITOR - {result.run_date.strftime('%A, %d %B %Y')}",
+        f"   Mode: MONITOR (no new buys) | {ai_status}",
+        "=" * 60,
+        "",
+        f"POSITIONS ANALYZED: {result.positions_count}",
+    ]
+
+    # Summary counts
+    hold_count = len(result.hold_recommendations)
+    sell_count = len(result.sell_recommendations)
+    lines.append(f"RECOMMENDATIONS: {hold_count} HOLD, {sell_count} SELL")
+
+    # HOLD recommendations
+    if result.hold_recommendations:
+        lines.extend(["", "HOLD POSITIONS:"])
+        for rec in result.hold_recommendations:
+            pnl_sign = "+" if rec.unrealized_pnl >= 0 else ""
+            ai_info = f"AI: {rec.ai_score:.1f}" if rec.ai_score else ""
+            lines.append(
+                f"   {rec.symbol:<8} {rec.shares:>6} shr @ Rp {rec.current_price:>10,.0f} | "
+                f"P&L: {pnl_sign}Rp {rec.unrealized_pnl:>10,.0f} ({pnl_sign}{rec.unrealized_pnl_percent:>5.1f}%) | "
+                f"Score: {rec.factor_score:.0f} {ai_info}"
+            )
+            if verbose and rec.ai_key_reasons:
+                for reason in rec.ai_key_reasons[:2]:
+                    lines.append(f"      • {reason}")
+
+    # SELL recommendations
+    if result.sell_recommendations:
+        lines.extend(["", "⚠️  SELL RECOMMENDATIONS:"])
+        for rec in result.sell_recommendations:
+            pnl_sign = "+" if rec.unrealized_pnl >= 0 else ""
+            ai_info = f"AI: {rec.ai_score:.1f}" if rec.ai_score else ""
+            lines.append(
+                f"   {rec.symbol:<8} {rec.shares:>6} shr @ Rp {rec.current_price:>10,.0f} | "
+                f"P&L: {pnl_sign}Rp {rec.unrealized_pnl:>10,.0f} ({pnl_sign}{rec.unrealized_pnl_percent:>5.1f}%) | "
+                f"Score: {rec.factor_score:.0f} {ai_info}"
+            )
+            if rec.reason:
+                lines.append(f"      → {rec.reason}")
+            if verbose and rec.ai_risk_factors:
+                for risk in rec.ai_risk_factors[:2]:
+                    lines.append(f"      ⚠ {risk}")
+
+    # Portfolio summary
+    lines.extend([
+        "",
+        "PORTFOLIO SUMMARY:",
+        f"   Positions: {result.positions_count} | Total Value: Rp {result.portfolio_value:,.0f} | Cash: Rp {result.cash_remaining:,.0f}",
+    ])
+
+    # Alerts
+    if result.alerts:
+        lines.extend(["", "ALERTS:"])
+        for alert in result.alerts:
+            lines.append(f"   ⚡ {alert}")
+
+    # Errors
+    if result.errors:
+        lines.extend(["", "ERRORS:"])
+        for error in result.errors:
+            lines.append(f"   ❌ {error}")
+
+    lines.append("")
+    lines.append("=" * 60)
+
+    return "\n".join(lines)
+
+
 def format_autopilot_result(result: AutopilotResult, verbose: bool = False) -> str:
     """Format autopilot result for CLI display.
 
@@ -843,11 +1119,17 @@ def format_autopilot_result(result: AutopilotResult, verbose: bool = False) -> s
     Returns:
         Formatted string
     """
+    # MONITOR MODE formatting
+    if result.is_monitor_mode:
+        return format_monitor_result(result, verbose)
+
+    # NORMAL MODE formatting
     ai_status = "AI: ON" if result.ai_enabled else "AI: OFF"
+    capital_str = f"Rp {result.capital:,.0f}" if result.capital else "N/A"
     lines = [
         "=" * 60,
         f"AUTOPILOT RUN - {result.run_date.strftime('%A, %d %B %Y')}",
-        f"   Index: {result.index_scanned} | Capital: Rp {result.capital:,.0f} | {ai_status}",
+        f"   Index: {result.index_scanned} | Capital: {capital_str} | {ai_status}",
         "=" * 60,
         "",
         f"SCANNED: {result.stocks_scanned} stocks | SIGNALS: {len(result.buy_signals)} BUY, {len(result.sell_signals)} SELL",
