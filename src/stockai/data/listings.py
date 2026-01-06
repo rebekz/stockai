@@ -145,7 +145,7 @@ JII70_STOCKS = [
     {"symbol": "SILO", "name": "Siloam International Hospitals", "sector": "Healthcare"},
     {"symbol": "AUTO", "name": "Astra Otoparts", "sector": "Consumer Cyclicals"},
     {"symbol": "SMDR", "name": "Samudera Indonesia", "sector": "Transportation & Logistics"},
-    {"symbol": "INKA", "name": "Industri Kereta Api", "sector": "Industrials"},
+    # Note: INKA removed (delisted from Yahoo Finance)
 ]
 
 # Other notable IDX stocks
@@ -168,7 +168,6 @@ OTHER_IDX_STOCKS = [
     {"symbol": "GIAA", "name": "Garuda Indonesia", "sector": "Transportation & Logistics"},
     {"symbol": "HEXA", "name": "Hexindo Adiperkasa", "sector": "Industrials"},
     {"symbol": "INDY", "name": "Indika Energy", "sector": "Energy"},
-    {"symbol": "INKA", "name": "Industri Kereta Api", "sector": "Industrials"},
     {"symbol": "KAEF", "name": "Kimia Farma", "sector": "Consumer Non-Cyclicals"},
     {"symbol": "LPKR", "name": "Lippo Karawaci", "sector": "Property & Real Estate"},
     {"symbol": "LPPF", "name": "Matahari Department Store", "sector": "Consumer Cyclicals"},

@@ -286,9 +286,24 @@ class SectorDataProvider:
             return pd.Series(0.0, index=stock_df.index)
 
         try:
+            # Prepare stock data - handle both indexed and column-based date formats
+            if "date" in stock_df.columns and not isinstance(stock_df.index, pd.DatetimeIndex):
+                # Data has 'date' column but integer index (from YahooFinanceSource)
+                stock_work = stock_df.set_index("date")
+            else:
+                stock_work = stock_df
+
             # Align data by date
-            stock_close = stock_df["close"] if "close" in stock_df.columns else stock_df.iloc[:, 0]
+            stock_close = stock_work["close"] if "close" in stock_work.columns else stock_work.iloc[:, 0]
             sector_close = sector_df["close"]
+
+            # Normalize indices to timezone-naive for comparison
+            if hasattr(stock_close.index, 'tz') and stock_close.index.tz is not None:
+                stock_close = stock_close.copy()
+                stock_close.index = stock_close.index.tz_localize(None)
+            if hasattr(sector_close.index, 'tz') and sector_close.index.tz is not None:
+                sector_close = sector_close.copy()
+                sector_close.index = sector_close.index.tz_localize(None)
 
             # Reindex sector to match stock dates
             sector_close = sector_close.reindex(stock_close.index, method="ffill")

@@ -66,7 +66,7 @@ JII70_SYMBOLS = [
     # Additional liquid sharia stocks
     "BTPS", "SRTG", "MLPT", "KPIG", "BMTR",
     "LSIP", "AALI", "SSMS", "SILO", "AUTO",
-    "SMDR", "INKA",
+    "SMDR",  # Note: INKA removed (delisted from Yahoo Finance)
 ]
 
 # Major sectors in IDX
