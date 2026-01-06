@@ -895,6 +895,20 @@ def format_autopilot_result(result: AutopilotResult, verbose: bool = False) -> s
                 ai_info = f"AI: {trade.ai_score:.1f}" if trade.ai_score else ""
                 reason = trade.ai_rejection_reason or "Unknown"
                 lines.append(f"   {trade.symbol}: Score {trade.score:.0f} → {ai_info} ✗ ({reason})")
+    else:
+        # AI disabled - show signals directly
+        if result.buy_signals:
+            lines.extend(["", "BUY SIGNALS:"])
+            for trade in result.buy_signals:
+                lines.append(
+                    f"   {trade.symbol}: Score {trade.score:.0f} @ Rp {trade.current_price:,.0f} "
+                    f"| SL: Rp {trade.stop_loss:,.0f} | Target: Rp {trade.target:,.0f}"
+                )
+
+        if result.sell_signals:
+            lines.extend(["", "SELL SIGNALS:"])
+            for trade in result.sell_signals:
+                lines.append(f"   {trade.symbol}: Score {trade.score:.0f} @ Rp {trade.current_price:,.0f} ({trade.reason})")
 
     # Sell executions
     if result.executed_sells:
